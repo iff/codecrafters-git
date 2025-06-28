@@ -19,6 +19,12 @@ enum Command {
         #[arg(action)]
         hash: String,
     },
+    HashObject {
+        #[arg(short = 'w')]
+        write: bool,
+        #[arg(action)]
+        path: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -27,5 +33,6 @@ fn main() -> anyhow::Result<()> {
     match args.command {
         Command::CatFile { pretty, hash } => commands::cat_file::invoke(pretty, &hash),
         Command::Init {} => commands::init::invoke(),
+        Command::HashObject { write, path } => commands::hash_object::invoke(write, &path),
     }
 }
