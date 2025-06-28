@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::env;
+use std::ffi::CString;
 #[allow(unused_imports)]
 use std::fs;
 use std::io::BufRead;
@@ -36,14 +37,19 @@ fn main() {
         // extract content: blob <size>\0<content>
         let mut header = Vec::new();
         r.read_until(0, &mut header).expect("0 in header");
-        // TODO convert this to a string
-        // is it utf8? 16..?
-        let content = str::from_utf8(header.as_slice()).expect("content");
+        let content = String::from(
+            CString::from_vec_with_nul(header)
+                .expect("null terminated header")
+                .to_str()
+                .expect("convert to string"),
+        );
 
-        let Some((_blob_type, size)) = content.split_once(' ') else {
+        let Some((blob_type, size)) = content.split_once(' ') else {
             return;
         };
         // TODO check that we get a 'blob'
+        // TODO match
+        assert!(blob_type == "blob");
 
         let size = size.parse::<u64>().expect("parsable size");
         let mut content = Vec::new();
