@@ -15,7 +15,7 @@ pub(crate) fn invoke(write: bool, path: &str) -> anyhow::Result<()> {
     // extract content: blob <size>\0<content>
     let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
     let _ = z.write(b"blob ")?;
-    let _ = z.write(&size.to_le_bytes())?;
+    let _ = z.write(&size.to_be_bytes())?;
     let _ = z.write(b"\0")?;
     let _ = z.write(data.as_slice())?;
     let compressed = z.finish()?;
