@@ -12,14 +12,16 @@ pub(crate) fn invoke(write: bool, path: &str) -> anyhow::Result<()> {
     let mut data = Vec::new();
     let read_size = reader.read_to_end(&mut data)?;
 
+    let mut hasher = Sha1::new();
+
     // extract content: blob <size>\0<content>
     let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
     write!(z, "blob {}\0", read_size)?;
+    hasher.update(format!("blob {}\0", read_size));
     let _ = z.write(data.as_slice())?;
+    hasher.update(&data);
     let compressed = z.finish()?;
 
-    let mut hasher = Sha1::new();
-    hasher.update(&compressed);
     let hash = hasher.finalize();
     let hash_str = hex::encode(hash);
 
