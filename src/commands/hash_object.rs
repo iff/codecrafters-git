@@ -4,14 +4,16 @@ use std::{
     io::{BufReader, Read, Write},
 };
 
+use flate2::{write::ZlibEncoder, Compression};
+
 pub(crate) fn invoke(write: bool, path: &str) -> anyhow::Result<()> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut data = Vec::new();
-    reader.read_to_end(&mut data)?;
+    let size = reader.read_to_end(&mut data)?;
 
     let mut hasher = Sha1::new();
-    hasher.update(data);
+    hasher.update(&data);
     let hash = hasher.finalize();
     let hash_str = hex::encode(hash);
 
@@ -22,7 +24,15 @@ pub(crate) fn invoke(write: bool, path: &str) -> anyhow::Result<()> {
             &hash_str[..2],
             &hash_str[2..]
         ))?;
-        out.write_all(hash_str.as_bytes())?;
+
+        // extract content: blob <size>\0<content>
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
+        let _ = z.write(b"blob ")?;
+        let _ = z.write(&size.to_le_bytes())?;
+        let _ = z.write(b"\0")?;
+        let _ = z.write(data.as_slice())?;
+        let compressed = z.finish()?;
+        out.write_all(compressed.as_slice())?;
     }
 
     let stdout = std::io::stdout();
