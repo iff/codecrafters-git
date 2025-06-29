@@ -123,6 +123,7 @@ impl Object {
 
         let mut content = Vec::new();
         r.take(self.size.try_into()?).read_to_end(&mut content)?;
+        assert!(content.len() == self.size);
         let content = str::from_utf8(content.as_slice())?;
         Ok(content.to_string())
     }
