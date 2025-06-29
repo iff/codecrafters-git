@@ -78,7 +78,7 @@ impl Object {
 
     pub fn from_hash(hash: &str) -> anyhow::Result<Object> {
         // TODO this should just populate the object and then we can get/parse the content?
-        let file = std::fs::File::open(object_path(hash)).expect("object exists");
+        let file = std::fs::File::open(object_path(hash))?;
         let mut r = BufReader::new(file);
         let mut data = Vec::new();
         r.read_to_end(&mut data)?;
@@ -89,13 +89,8 @@ impl Object {
 
         // extract content: blob <size>\0<content>
         let mut header = Vec::new();
-        r.read_until(0, &mut header).expect("0 in header");
-        let content = String::from(
-            CString::from_vec_with_nul(header)
-                .expect("null terminated header")
-                .to_str()
-                .expect("convert to string"),
-        );
+        r.read_until(0, &mut header)?;
+        let content = String::from(CString::from_vec_with_nul(header)?.to_str()?);
 
         let Some((object_type, size)) = content.split_once(' ') else {
             return Err(anyhow::Error::msg(format!("cant parse header {}", content)));
@@ -127,10 +122,7 @@ impl Object {
         r.skip_until(0)?;
 
         let mut content = Vec::new();
-        r.take(self.size.try_into()?)
-            .read_to_end(&mut content)
-            .expect("reading content of size");
-        // TODO CString as well?
+        r.take(self.size.try_into()?).read_to_end(&mut content)?;
         let content = str::from_utf8(content.as_slice())?;
         Ok(content.to_string())
     }
