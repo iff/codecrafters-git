@@ -26,6 +26,12 @@ enum Command {
         #[arg(action)]
         path: String,
     },
+    LsTree {
+        #[arg(long)]
+        name_only: bool,
+        #[arg(action)]
+        hash: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -35,5 +41,6 @@ fn main() -> anyhow::Result<()> {
         Command::CatFile { pretty, hash } => commands::cat_file::invoke(pretty, &hash),
         Command::Init {} => commands::init::invoke(),
         Command::HashObject { write, path } => commands::hash_object::invoke(write, &path),
+        Command::LsTree { name_only, hash } => commands::ls_tree::invoke(name_only, &hash),
     }
 }
