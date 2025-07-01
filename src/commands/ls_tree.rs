@@ -13,6 +13,7 @@ pub(crate) fn invoke(name_only: bool, hash: &str) -> anyhow::Result<()> {
                 .collect::<Vec<String>>()
                 .join("\n"),
         )?;
+        to_stdout("\n".to_string())?;
     } else {
         to_stdout(
             content
