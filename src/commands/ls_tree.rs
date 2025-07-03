@@ -1,26 +1,27 @@
 use crate::object::to_stdout;
 use crate::object::Object;
+use crate::object::ObjectType;
+use crate::object::TreeObject;
 
 pub(crate) fn invoke(name_only: bool, hash: &str) -> anyhow::Result<()> {
     let object = Object::from_hash(hash)?;
-    let content = object.tree_content()?;
+    let tree = TreeObject::read(&object)?;
     if name_only {
         to_stdout(
-            content
-                .iter()
+            tree.iter()
                 .map(|t| t.name.clone())
                 .collect::<Vec<String>>()
                 .join("\n"),
         )?;
     } else {
         to_stdout(
-            content
-                .iter()
+            tree.iter()
                 .map(|t| {
-                    // FIXME object type
+                    let ot = ObjectType::Tree;
                     format!(
-                        "{} blob {}\t{}",
+                        "{} {} {}\t{}",
                         t.mode,
+                        ot,
                         hex::encode(t.sha_bytes),
                         t.name.clone()
                     )

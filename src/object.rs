@@ -57,18 +57,43 @@ pub(crate) struct TreeObject {
 }
 
 impl TreeObject {
-    // pub fn from_bytes(data: &Vec<u8>) -> anyhow::Result<Self> {
-    //     let (meta, sha) = data.split_at(null);
-    //     let (mode, name) = meta.split_at(' '.into());
-    //     let mode = 40000;
-    //     let name = str::from_utf8(&data[4..5])?.to_string();
-    //     let byte_sha = sha;
-    //     Ok(TreeObject {
-    //         mode,
-    //         name,
-    //         sha_bytes: byte_sha,
-    //     })
-    // }
+    pub fn read(object: &Object) -> anyhow::Result<Vec<Self>> {
+        assert!(object.object_type == ObjectType::Tree);
+
+        let z = ZlibDecoder::new(&object.compressed[..]);
+        let mut r = BufReader::new(z);
+
+        // skip header
+        r.skip_until(0)?;
+
+        let mut result = Vec::new();
+
+        while !r.fill_buf().unwrap().is_empty() {
+            let mut meta = Vec::new();
+            r.read_until(0, &mut meta).expect("meta data with \\0");
+            let meta = String::from(
+                CString::from_vec_with_nul(meta)
+                    .expect("cstring")
+                    .to_str()?,
+            );
+
+            let Some((mode, name)) = meta.split_once(' ') else {
+                return Err(anyhow::Error::msg(format!("cant parse header {}", meta)));
+            };
+            let mode = mode.parse::<u32>()?;
+
+            let mut sha_bytes = [0; 20];
+            r.read_exact(&mut sha_bytes)?;
+
+            result.push(TreeObject {
+                mode,
+                name: name.to_string(),
+                sha_bytes,
+            });
+        }
+
+        Ok(result)
+    }
 }
 
 impl Object {
@@ -136,85 +161,18 @@ impl Object {
     }
 
     pub fn content(&self) -> anyhow::Result<String> {
+        assert!(self.object_type == ObjectType::Blob);
         let z = ZlibDecoder::new(&self.compressed[..]);
         let mut r = BufReader::new(z);
 
         // skip header
         r.skip_until(0)?;
 
-        match self.object_type {
-            ObjectType::Blob => {
-                let mut content = Vec::new();
-                r.take(self.size.try_into()?).read_to_end(&mut content)?;
-                assert!(content.len() == self.size);
-                let content = str::from_utf8(content.as_slice())?;
-                Ok(content.to_string())
-            }
-            ObjectType::Tree => {
-                let mut result = Vec::new();
-
-                while !r.fill_buf().unwrap().is_empty() {
-                    let mut meta = Vec::new();
-                    r.read_until(0, &mut meta)?;
-                    let meta = String::from(CString::from_vec_with_nul(meta)?.to_str()?);
-
-                    let Some((mode, name)) = meta.split_once(' ') else {
-                        return Err(anyhow::Error::msg(format!("cant parse header {}", meta)));
-                    };
-                    let mode = mode.parse::<u32>()?;
-
-                    let mut sha_bytes = Vec::new();
-                    r.read_until(b'\n', &mut sha_bytes)?;
-
-                    result.push(TreeObject {
-                        mode,
-                        name: name.to_string(),
-                        sha_bytes: sha_bytes[0..20].try_into()?,
-                    });
-                }
-
-                // Ok(result)
-                Err(anyhow::Error::msg(""))
-            }
-            ObjectType::Tag => Err(anyhow::Error::msg("reading tag not implemented yet")),
-            ObjectType::Commit => Err(anyhow::Error::msg("reading commit not implemented yet")),
-        }
-    }
-
-    pub fn tree_content(&self) -> anyhow::Result<Vec<TreeObject>> {
-        let z = ZlibDecoder::new(&self.compressed[..]);
-        let mut r = BufReader::new(z);
-
-        // skip header
-        r.skip_until(0)?;
-
-        let mut result = Vec::new();
-
-        while !r.fill_buf().unwrap().is_empty() {
-            let mut meta = Vec::new();
-            r.read_until(0, &mut meta).expect("meta data with \\0");
-            let meta = String::from(
-                CString::from_vec_with_nul(meta)
-                    .expect("cstring")
-                    .to_str()?,
-            );
-
-            let Some((mode, name)) = meta.split_once(' ') else {
-                return Err(anyhow::Error::msg(format!("cant parse header {}", meta)));
-            };
-            let mode = mode.parse::<u32>()?;
-
-            let mut sha_bytes = [0; 20];
-            r.read_exact(&mut sha_bytes)?;
-
-            result.push(TreeObject {
-                mode,
-                name: name.to_string(),
-                sha_bytes,
-            });
-        }
-
-        Ok(result)
+        let mut content = Vec::new();
+        r.take(self.size.try_into()?).read_to_end(&mut content)?;
+        assert!(content.len() == self.size);
+        let content = str::from_utf8(content.as_slice())?;
+        Ok(content.to_string())
     }
 
     pub fn hash_str(&self) -> String {
