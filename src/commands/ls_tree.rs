@@ -20,13 +20,7 @@ pub(crate) fn invoke(name_only: bool, hash: &str) -> anyhow::Result<()> {
                 .iter()
                 .map(|t| {
                     // FIXME object type
-                    // FIXME sha
-                    format!(
-                        "{} blob {}\t{}",
-                        t.mode,
-                        String::from("sha"),
-                        t.name.clone()
-                    )
+                    format!("{} blob {}\t{}", t.mode, hex::encode(t.sha_bytes), t.name.clone())
                 })
                 .collect::<Vec<String>>()
                 .join("\n"),
