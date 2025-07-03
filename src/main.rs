@@ -32,6 +32,7 @@ enum Command {
         #[arg(action)]
         hash: String,
     },
+    WriteTree {},
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,5 +43,6 @@ fn main() -> anyhow::Result<()> {
         Command::Init {} => commands::init::invoke(),
         Command::HashObject { write, path } => commands::hash_object::invoke(write, &path),
         Command::LsTree { name_only, hash } => commands::ls_tree::invoke(name_only, &hash),
+        Command::WriteTree {} => commands::write_tree::invoke(),
     }
 }
