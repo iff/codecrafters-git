@@ -1,3 +1,4 @@
+use anyhow::Context;
 use sha1::{Digest, Sha1};
 use std::ffi::CString;
 use std::{
@@ -45,7 +46,7 @@ pub(crate) struct Object {
     object_type: ObjectType,
     // TODO usize vs u64?
     size: usize,
-    hash: Vec<u8>,
+    hash: [u8; 20],
     // TODO refactor later - does not really make sense to be here
     compressed: Vec<u8>,
 }
@@ -104,21 +105,16 @@ impl Object {
         let mut data = Vec::new();
         let read_size = reader.read_to_end(&mut data)?;
 
-        let mut hasher = Sha1::new();
-        let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
-
-        // how do we do this in Rust?
-        // this is a duplicated code, impl std::io::Write to save?
-        write!(z, "{} {}\0", ObjectType::Blob, read_size)?;
-        hasher.update(format!("{} {}\0", ObjectType::Blob, read_size));
-        let _ = z.write(data.as_slice())?;
-        hasher.update(&data);
+        let buf = Vec::new();
+        let mut writer = GitObjectWriter::new(buf);
+        writer.write_all(format!("{} {}\0", ObjectType::Blob, read_size).as_bytes())?;
+        let (compressed, hash) = writer.finish()?;
 
         Ok(Object {
             object_type: ObjectType::Blob,
             size: read_size,
-            hash: hasher.finalize().to_vec(),
-            compressed: z.finish()?,
+            hash,
+            compressed,
         })
     }
 
@@ -155,7 +151,9 @@ impl Object {
         Ok(Object {
             object_type: ot,
             size,
-            hash: hash.to_owned().into(),
+            hash: hex::decode(hash).context("decoding hash")?[0..20]
+                .try_into()
+                .with_context(|| format!("coercing hash to u8 array: {}", hash))?,
             compressed: compressed_content,
         })
     }
@@ -176,15 +174,46 @@ impl Object {
     }
 
     pub fn hash_str(&self) -> String {
-        hex::encode(&self.hash)
+        hex::encode(self.hash)
     }
 
     pub fn write(&self) -> anyhow::Result<()> {
-        let hash_str = hex::encode(&self.hash);
+        let hash_str = hex::encode(self.hash);
         fs::create_dir_all(format!(".git/objects/{}", &hash_str[..2]))?;
         let mut out = fs::File::create(object_path(&hash_str))?;
 
         out.write_all(self.compressed.as_slice())?;
         Ok(())
+    }
+}
+
+pub struct GitObjectWriter<W: Write> {
+    compressor: ZlibEncoder<W>,
+    hasher: Sha1,
+}
+
+impl<W: Write> GitObjectWriter<W> {
+    pub fn new(writer: W) -> Self {
+        GitObjectWriter {
+            compressor: ZlibEncoder::new(writer, Compression::default()),
+            hasher: Sha1::new(),
+        }
+    }
+
+    pub fn finish(self) -> std::io::Result<(W, [u8; 20])> {
+        let writer = self.compressor.finish()?;
+        let hash = self.hasher.finalize();
+        Ok((writer, hash.into()))
+    }
+}
+
+impl<W: Write> Write for GitObjectWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.hasher.update(buf);
+        self.compressor.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.compressor.flush()
     }
 }
