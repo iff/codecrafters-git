@@ -34,6 +34,7 @@
 // 00000100  74 20 65 6e 74 72 69 65  73 0a                    |t entries.|
 // 0000010a
 
+use chrono::Local;
 use std::io::Write;
 
 use crate::object::{to_stdout, GitObjectWriter, Object};
@@ -44,9 +45,15 @@ pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyho
     } else {
         String::from("")
     };
-    let datetime = String::from("todo");
+
+    let now = Local::now();
+    let timestamp = now.timestamp();
+    let offset = now.offset().local_minus_utc() / 3600;
+    let timestamp = format!("{} {:+03}00", timestamp, offset);
+
+    // TODO author
     let content = format!(
-        "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {datetime}\0committer Yves Ineichen <iff@yvesineichen.com> {datetime}\0\0{message}",
+        "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {timestamp}\0committer Yves Ineichen <iff@yvesineichen.com> {timestamp}\0\0{message}",
     );
 
     let buf = Vec::new();
