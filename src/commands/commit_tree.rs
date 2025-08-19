@@ -35,33 +35,42 @@
 // 0000010a
 
 use chrono::Local;
-use std::io::Write;
+use std::{fmt::Write, io::Write as _};
 
 use crate::object::{to_stdout, GitObjectWriter, Object};
 
 pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyhow::Result<()> {
-    let maybe_parent = if let Some(parent) = parent {
-        format!("parent {}\0", parent)
-    } else {
-        String::from("")
-    };
+    let mut commit = String::new();
+    writeln!(commit, "tree {tree}")?;
+    if let Some(parent) = parent {
+        writeln!(commit, "parent {parent}")?;
+    }
 
     let now = Local::now();
     let offset = now.offset().local_minus_utc() / 3600;
     let timestamp = format!("{} {:+03}00", now.timestamp(), offset);
+    writeln!(
+        commit,
+        "author Yves Ineichen <iff@yvesineichen.com> {timestamp}"
+    )?;
+    writeln!(
+        commit,
+        "committer Yves Ineichen <iff@yvesineichen.com> {timestamp}"
+    )?;
+    write!(commit, "\n{message}")?;
 
     // TODO author
-    let content = format!(
-        "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {timestamp}\0committer Yves Ineichen <iff@yvesineichen.com> {timestamp}\0\0{message}",
-    );
-    let commit = format!("commit {}\0{content}", content.len());
+    // let content = format!(
+    //     "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {timestamp}\0committer Yves Ineichen <iff@yvesineichen.com> {timestamp}\0\0{message}",
+    // );
 
     let buf = Vec::new();
     let mut writer = GitObjectWriter::new(buf);
+    writer.write_all(format!("commit {}\0", commit.len()).as_bytes())?;
     writer.write_all(commit.as_bytes())?;
     let (compressed, hash) = writer.finish()?;
 
-    let o = Object::new_commit(content.len(), hash, &compressed);
+    let o = Object::new_commit(commit.len(), hash, &compressed);
     o.write()?;
     to_stdout(o.hash_str())?;
 
