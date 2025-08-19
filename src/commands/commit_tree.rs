@@ -41,7 +41,7 @@ use crate::object::{to_stdout, GitObjectWriter, Object};
 
 pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyhow::Result<()> {
     let maybe_parent = if let Some(parent) = parent {
-        format!("parent {}\0", parent)
+        format!("parent {}\n", parent)
     } else {
         String::from("")
     };
@@ -50,15 +50,16 @@ pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyho
     let timestamp = now.timestamp();
     let offset = now.offset().local_minus_utc() / 3600;
     let timestamp = format!("{} {:+03}00", timestamp, offset);
+    println!("{timestamp}");
 
     // TODO author
     let content = format!(
-        "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {timestamp}\0committer Yves Ineichen <iff@yvesineichen.com> {timestamp}\0\0{message}",
+        "tree {tree}\n{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {timestamp}\ncommitter Yves Ineichen <iff@yvesineichen.com> {timestamp}\n\n{message}",
     );
 
     let buf = Vec::new();
     let mut writer = GitObjectWriter::new(buf);
-    writer.write_all(format!("commit {}\0{content}", content.len()).as_bytes())?;
+    writer.write_all(format!("commit {}\n{content}", content.len()).as_bytes())?;
     let (compressed, hash) = writer.finish()?;
 
     let o = Object::new_commit(content.len(), hash, &compressed);
