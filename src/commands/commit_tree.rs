@@ -57,7 +57,7 @@ pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyho
         commit,
         "committer Yves Ineichen <iff@yvesineichen.com> {timestamp}"
     )?;
-    write!(commit, "\n{message}")?;
+    writeln!(commit, "\n{message}")?;
 
     // TODO author
     // let content = format!(
