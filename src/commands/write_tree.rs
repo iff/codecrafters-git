@@ -19,9 +19,6 @@ fn write_tree(path: &Path) -> anyhow::Result<Option<[u8; 20]>> {
 
         let path = entry.path();
 
-        // TODO need to refactor - computing hash here is not nice
-        // here we need to hash everything?
-        // so need some kind of recursion
         let hash = if meta.is_dir() {
             // If the entry is a directory, recursively create a tree object and record its SHA-1 hash
             let Some(hash) = write_tree(&path)? else {
@@ -50,6 +47,7 @@ fn write_tree(path: &Path) -> anyhow::Result<Option<[u8; 20]>> {
         let buf = Vec::new();
         let mut writer = GitObjectWriter::new(buf);
         writer.write_all(format!("{} {}\0", ObjectType::Tree, tree_size).as_bytes())?;
+        writer.write_all(&tree_objects)?;
         let (compressed, hash) = writer.finish()?;
 
         let object = Object::new_tree(tree_size, hash, &compressed);

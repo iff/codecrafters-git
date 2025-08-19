@@ -117,6 +117,7 @@ impl Object {
         let buf = Vec::new();
         let mut writer = GitObjectWriter::new(buf);
         writer.write_all(format!("{} {}\0", ObjectType::Blob, read_size).as_bytes())?;
+        writer.write_all(&data)?;
         let (compressed, hash) = writer.finish()?;
 
         Ok(Object {
