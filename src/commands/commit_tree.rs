@@ -34,6 +34,29 @@
 // 00000100  74 20 65 6e 74 72 69 65  73 0a                    |t entries.|
 // 0000010a
 
+use std::io::Write;
+
+use crate::object::{to_stdout, GitObjectWriter, Object};
+
 pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyhow::Result<()> {
+    let maybe_parent = if let Some(parent) = parent {
+        format!("parent {}\0", parent)
+    } else {
+        String::from("")
+    };
+    let datetime = String::from("todo");
+    let content = format!(
+        "tree {tree}\0{maybe_parent}author Yves Ineichen <iff@yvesineichen.com> {datetime}\0committer Yves Ineichen <iff@yvesineichen.com> {datetime}\0\0{message}",
+    );
+
+    let buf = Vec::new();
+    let mut writer = GitObjectWriter::new(buf);
+    writer.write_all(format!("commit {}\0{content}", content.len()).as_bytes())?;
+    let (compressed, hash) = writer.finish()?;
+
+    let o = Object::new_commit(content.len(), hash, &compressed);
+    o.write()?;
+    to_stdout(o.hash_str())?;
+
     Ok(())
 }
