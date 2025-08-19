@@ -178,7 +178,7 @@ impl Object {
     }
 
     pub fn content(&self) -> anyhow::Result<String> {
-        assert!(self.object_type == ObjectType::Blob);
+        // assert!(self.object_type == ObjectType::Blob);
         let z = ZlibDecoder::new(&self.compressed[..]);
         let mut r = BufReader::new(z);
 
