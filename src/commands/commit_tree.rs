@@ -50,7 +50,6 @@ pub(crate) fn invoke(message: &str, parent: Option<String>, tree: &str) -> anyho
     let timestamp = now.timestamp();
     let offset = now.offset().local_minus_utc() / 3600;
     let timestamp = format!("{} {:+03}00", timestamp, offset);
-    println!("{timestamp}");
 
     // TODO author
     let content = format!(
