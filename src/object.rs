@@ -107,6 +107,15 @@ impl Object {
         }
     }
 
+    pub fn new_commit(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
+        Object {
+            object_type: ObjectType::Commit,
+            size,
+            hash,
+            compressed: Vec::from(compressed),
+        }
+    }
+
     // TODO how do we distinguish between types we want to create
     pub fn from_path(path: &str) -> anyhow::Result<Self> {
         let file = fs::File::open(path)?;
