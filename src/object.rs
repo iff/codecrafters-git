@@ -41,16 +41,6 @@ fn object_path(hash: &str) -> String {
     format!(".git/objects/{}/{}", &hash[..2], &hash[2..])
 }
 
-pub(crate) struct Object {
-    #[allow(dead_code)]
-    object_type: ObjectType,
-    // TODO usize vs u64?
-    size: usize,
-    hash: [u8; 20],
-    // TODO refactor later - does not really make sense to be here
-    compressed: Vec<u8>,
-}
-
 pub(crate) struct TreeObject {
     pub(crate) mode: u32,
     pub(crate) name: String, // TODO
@@ -97,9 +87,28 @@ impl TreeObject {
     }
 }
 
+pub(crate) struct Object {
+    #[allow(dead_code)]
+    object_type: ObjectType,
+    // TODO usize vs u64?
+    size: usize,
+    hash: [u8; 20],
+    // TODO refactor later - does not really make sense to be here
+    compressed: Vec<u8>,
+}
+
 impl Object {
+    pub fn new_tree(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
+        Object {
+            object_type: ObjectType::Tree,
+            size,
+            hash,
+            compressed: Vec::from(compressed),
+        }
+    }
+
     // TODO how do we distinguish between types we want to create
-    pub fn from_path(path: &str) -> anyhow::Result<Object> {
+    pub fn from_path(path: &str) -> anyhow::Result<Self> {
         let file = fs::File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut data = Vec::new();
@@ -175,6 +184,10 @@ impl Object {
 
     pub fn hash_str(&self) -> String {
         hex::encode(self.hash)
+    }
+
+    pub fn hash(&self) -> [u8; 20] {
+        self.hash
     }
 
     pub fn write(&self) -> anyhow::Result<()> {
