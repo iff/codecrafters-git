@@ -11,5 +11,13 @@
 // clone <url> <dir>
 
 pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
+    let response = reqwest::blocking::get(format!("{url}/info/refs?service=git-upload-pack"))?;
+    let body = response.text()?;
+    // first line: Clients MUST validate the first five bytes of the response entity matches the regex ^[0-9a-f]{4}#. If this test fails, clients MUST NOT continue.
+    // parse 001e#
+    // then 00000159SHA HEAD...
+    // then all refs
+    // end with 0000
+    println!("{}", body);
     Ok(())
 }
