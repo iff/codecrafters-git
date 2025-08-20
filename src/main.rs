@@ -20,6 +20,12 @@ enum Command {
         #[arg(action)]
         hash: String,
     },
+    Clone {
+        #[arg(action)]
+        url: String,
+        #[arg(action)]
+        path: Option<String>,
+    },
     CommitTree {
         #[arg(short = 'p')]
         parent: Option<String>,
@@ -48,6 +54,7 @@ fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::CatFile { pretty, hash } => commands::cat_file::invoke(pretty, &hash),
+        Command::Clone { url, path } => commands::clone::invoke(&url, path),
         Command::CommitTree {
             parent,
             message,
