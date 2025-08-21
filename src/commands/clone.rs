@@ -107,10 +107,6 @@ impl Refs {
         let (rest, (sha, capabilities)) =
             parse_head(rest).map_err(|e| anyhow::anyhow!("Failed to parse head: {:?}", e))?;
 
-        // let (_rest, (refs, _)) = many_till(terminated(parse_ref_list, tag("\n")), tag("0000"))
-        //     .parse(rest)
-        //     .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
-
         let (_, refs) = fold_many0(
             preceded(not(tag("0000")), parse_ref_list),
             Vec::new,
