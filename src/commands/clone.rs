@@ -11,9 +11,11 @@
 // clone <url> <dir>
 
 use nom::{
-    bytes::complete::{is_not, take, take_until},
+    bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
-    sequence::delimited,
+    combinator::not,
+    multi::fold_many0,
+    sequence::{delimited, preceded},
     IResult, Parser,
 };
 
@@ -25,17 +27,9 @@ struct RefSpec {
 struct Refs {
     // TODO cap_list
     head: String, //[u8; 40],
+    // TODO Map name -> sha?
     refs: Vec<RefSpec>,
 }
-
-// 000001599b36649874280c532f7c06f16b7d7c9aa86073c3 HEADmulti_ack thin-pack side-band side-band-6
-// 4k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack
-// _detailed allow-tip-sha1-in-want allow-reachable-sha1-in-want no-done symref=HEAD:refs/heads/m
-// ain filter object-format=sha1 agent=git/github-5a2d4c40a633-Linux
-// 003d9b36649874280c532f7c06f16b7d7c9aa86073c3 refs/heads/main
-// 003e3fcffffcacaf807d6eaf97ce5ac8131fab2a39db refs/pull/1/head
-// 003e48fc09b90b2db56dd7a36e70fc98991086ace882 refs/pull/2/head
-// 0000
 
 fn validate_header(input: &str) -> IResult<&str, &str> {
     // Clients MUST validate the first five bytes of the response entity matches the
@@ -71,31 +65,72 @@ fn parse_head(input: &str) -> IResult<&str, (&str, &str)> {
     Ok((rest, (sha, parsed)))
 }
 
+fn parse_ref_list(input: &str) -> IResult<&str, RefSpec> {
+    // 003d9b36649874280c532f7c06f16b7d7c9aa86073c3 refs/heads/main
+    // 003e3fcffffcacaf807d6eaf97ce5ac8131fab2a39db refs/pull/1/head
+    // 003e48fc09b90b2db56dd7a36e70fc98991086ace882 refs/pull/2/head
+
+    let (rest, _len) = take(4u8)(input)?;
+    let (rest, sha) = take(40u8)(rest)?;
+    let (rest, _) = char(' ')(rest)?;
+    let (rest, ref_name) = take_until("\n")(rest)?;
+    let (rest, _) = char('\n')(rest)?;
+
+    // let len = usize::from_str_radix(len, 16);
+    // println!("{:?} == {:?}", len, sha.len() + ref_name.len() + 2);
+    // assert!(len == Ok(sha.len() + ref_name.len() + 2));
+
+    Ok((
+        rest,
+        RefSpec {
+            sha: sha.to_owned(),
+            name: ref_name.to_owned(),
+        },
+    ))
+}
+
 impl Refs {
     pub(crate) fn from_response(response: &str) -> anyhow::Result<Self> {
         let (rest, _parsed) = validate_header(response)
             .map_err(|e| anyhow::anyhow!("Failed to validate header: {:?}", e))?;
 
-        let (_rest, (sha, _cap)) =
-            parse_head(rest).map_err(|e| anyhow::anyhow!("Failed to validate header: {:?}", e))?;
+        // TODO capabilities
+        let (rest, (sha, _cap)) =
+            parse_head(rest).map_err(|e| anyhow::anyhow!("Failed to parse head: {:?}", e))?;
 
-        // then all refs
-        //   first 4 bytes are len then SHA den ref name
+        // let (_rest, (refs, _)) = many_till(terminated(parse_ref_list, tag("\n")), tag("0000"))
+        //     .parse(rest)
+        //     .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
 
-        // end with 0000
+        let (_, refs) = fold_many0(
+            preceded(not(tag("0000")), parse_ref_list),
+            Vec::new,
+            |mut acc: Vec<RefSpec>, item: RefSpec| {
+                acc.push(item);
+                acc
+            },
+        )
+        .parse(rest)
+        .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
 
         Ok(Refs {
             head: sha.to_owned(),
-            refs: Vec::new(),
+            refs,
         })
     }
 }
 
-pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
+pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
     let response = reqwest::blocking::get(format!("{url}/info/refs?service=git-upload-pack"))?;
     let body = response.text()?;
+    // println!("{body}\n");
+
     let refs = Refs::from_response(body.as_str())?;
     println!("HEAD = {:?}", refs.head);
+
+    for r in refs.refs {
+        println!("{}: {}", r.name, r.sha);
+    }
 
     Ok(())
 }
