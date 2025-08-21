@@ -20,6 +20,7 @@ use nom::{
     sequence::{delimited, preceded},
     IResult, Parser,
 };
+use reqwest::header;
 
 struct RefSpec {
     sha: String, // [u8; 40],
@@ -134,9 +135,24 @@ pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
     let refs = Refs::from_response(body.as_str())?;
     println!("HEAD = {:?}", refs.head);
 
-    for r in refs.refs {
-        println!("{}: {}", r.name, r.sha);
-    }
+    // for r in refs.refs {
+    //     println!("{}: {}", r.name, r.sha);
+    // }
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        "Content-Type",
+        header::HeaderValue::from_static("application/x-git-upload-pack-request"),
+    );
+    let client = reqwest::blocking::Client::new();
+    let body = format!("0032want {}\n0000", refs.head);
+    println!("{body}");
+    let response = client
+        .post(format!("{url}/git-upload-pack"))
+        .headers(headers)
+        .body(body)
+        .send()?;
+    println!("{:?}", response.text());
 
     Ok(())
 }
