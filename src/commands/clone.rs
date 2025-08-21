@@ -10,6 +10,8 @@
 // ls-remote <url> HEAD
 // clone <url> <dir>
 
+use std::collections::HashSet;
+
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
@@ -25,8 +27,9 @@ struct RefSpec {
 }
 
 struct Refs {
-    // TODO cap_list
     head: String, //[u8; 40],
+    // TODO what makes sense? see later
+    capabilities: HashSet<String>,
     // TODO Map name -> sha?
     refs: Vec<RefSpec>,
 }
@@ -46,7 +49,7 @@ fn validate_header(input: &str) -> IResult<&str, &str> {
     Ok((rest, parsed))
 }
 
-fn parse_head(input: &str) -> IResult<&str, (&str, &str)> {
+fn parse_head(input: &str) -> IResult<&str, (&str, HashSet<String>)> {
     // TODO why is that not 0000\n?
     // 0000 0159 9b36649874280c532f7c06f16b7d7c9aa86073c3 HEADmulti_ack thin-pack side-band side-band-6
     // 4k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack
@@ -59,10 +62,17 @@ fn parse_head(input: &str) -> IResult<&str, (&str, &str)> {
     let (rest, sha) = take(40u8)(rest)?;
 
     // TODO store capabilities?
-    let (rest, parsed) = take_until("\n")(rest)?;
+    let (rest, _head) = take_until("\0")(rest)?;
+    let (rest, capabilities) = take_until("\n")(rest)?;
     let (rest, _) = char('\n')(rest)?;
 
-    Ok((rest, (sha, parsed)))
+    let capabilities = capabilities
+        .to_owned()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+
+    Ok((rest, (sha, capabilities)))
 }
 
 fn parse_ref_list(input: &str) -> IResult<&str, RefSpec> {
@@ -94,8 +104,7 @@ impl Refs {
         let (rest, _parsed) = validate_header(response)
             .map_err(|e| anyhow::anyhow!("Failed to validate header: {:?}", e))?;
 
-        // TODO capabilities
-        let (rest, (sha, _cap)) =
+        let (rest, (sha, capabilities)) =
             parse_head(rest).map_err(|e| anyhow::anyhow!("Failed to parse head: {:?}", e))?;
 
         // let (_rest, (refs, _)) = many_till(terminated(parse_ref_list, tag("\n")), tag("0000"))
@@ -115,6 +124,7 @@ impl Refs {
 
         Ok(Refs {
             head: sha.to_owned(),
+            capabilities,
             refs,
         })
     }
