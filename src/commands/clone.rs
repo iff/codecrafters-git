@@ -10,7 +10,7 @@
 // ls-remote <url> HEAD
 // clone <url> <dir>
 
-use std::collections::HashSet;
+use std::{collections::HashSet, env, fs};
 
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
@@ -21,6 +21,8 @@ use nom::{
     IResult, Parser,
 };
 use reqwest::header;
+
+use crate::commands::init;
 
 struct RefSpec {
     sha: String, // [u8; 40],
@@ -127,7 +129,23 @@ impl Refs {
     }
 }
 
-pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
+pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
+    let path = match path {
+        None => {
+            let v: Vec<&str> = url.split('/').collect();
+            let name = v.last().unwrap().to_string();
+            name.split(".")
+                .collect::<Vec<&str>>()
+                .first()
+                .unwrap()
+                .to_string()
+        }
+        Some(path) => path,
+    };
+    fs::create_dir(path.clone())?;
+    env::set_current_dir(path)?;
+    init::invoke()?;
+
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(format!("{url}/info/refs?service=git-upload-pack"))
@@ -144,6 +162,7 @@ pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
         "Git-Protocol",
         header::HeaderValue::from_static("version=2"),
     );
+    // https://git-scm.com/docs/protocol-v2
     // Send data: 0011command=fetch001aagent=git/2.50.1-Linux0016object-format
     // Send data: =sha10001000dthin-pack000fno-progress000dofs-delta0032want 9
     // Send data: b36649874280c532f7c06f16b7d7c9aa86073c3.0032want 9b366498742
@@ -155,6 +174,8 @@ pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
         .headers(headers)
         .body(body)
         .send()?;
+
+    // TODO only the simplest case will we directly get the pack file (clone is probably that)
     let pack = response.text()?.into_bytes();
 
     Ok(())
