@@ -128,25 +128,23 @@ impl Refs {
 }
 
 pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
-    let response = reqwest::blocking::get(format!("{url}/info/refs?service=git-upload-pack"))?;
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(format!("{url}/info/refs?service=git-upload-pack"))
+        .send()?;
     let body = response.text()?;
-    // println!("{body}\n");
-
     let refs = Refs::from_response(body.as_str())?;
-    println!("HEAD = {:?}", refs.head);
 
-    // for r in refs.refs {
-    //     println!("{}: {}", r.name, r.sha);
-    // }
-
+    // Something is off here - probably I dont understand the protocol properly
     let mut headers = header::HeaderMap::new();
     headers.insert(
         "Content-Type",
         header::HeaderValue::from_static("application/x-git-upload-pack-request"),
     );
-    let client = reqwest::blocking::Client::new();
-    let body = format!("0032want {}\n0000", refs.head);
-    println!("{body}");
+    // just want the current HEAD sha
+    // XXX like this I get a response! but not sure what it means and do these things go out as
+    // binary?
+    let body = format!("0032want {}\n00000009done\n", refs.head);
     let response = client
         .post(format!("{url}/git-upload-pack"))
         .headers(headers)
