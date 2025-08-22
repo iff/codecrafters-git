@@ -135,22 +135,27 @@ pub(crate) fn invoke(url: &str, _path: Option<String>) -> anyhow::Result<()> {
     let body = response.text()?;
     let refs = Refs::from_response(body.as_str())?;
 
-    // Something is off here - probably I dont understand the protocol properly
     let mut headers = header::HeaderMap::new();
     headers.insert(
         "Content-Type",
         header::HeaderValue::from_static("application/x-git-upload-pack-request"),
     );
-    // just want the current HEAD sha
-    // XXX like this I get a response! but not sure what it means and do these things go out as
-    // binary?
-    let body = format!("0032want {}\n00000009done\n", refs.head);
+    headers.insert(
+        "Git-Protocol",
+        header::HeaderValue::from_static("version=2"),
+    );
+    // Send data: 0011command=fetch001aagent=git/2.50.1-Linux0016object-format
+    // Send data: =sha10001000dthin-pack000fno-progress000dofs-delta0032want 9
+    // Send data: b36649874280c532f7c06f16b7d7c9aa86073c3.0032want 9b366498742
+    // Send data: 80c532f7c06f16b7d7c9aa86073c3.0009done.0000
+    // Info: upload completely sent off: 223 bytes
+    let body = format!("0011command=fetch0016object-format=sha10001000fno-progress0032want {}\n0032want {}\n0009done\n0000", refs.head, refs.head);
     let response = client
         .post(format!("{url}/git-upload-pack"))
         .headers(headers)
         .body(body)
         .send()?;
-    println!("{:?}", response.text());
+    let pack = response.text()?.into_bytes();
 
     Ok(())
 }
