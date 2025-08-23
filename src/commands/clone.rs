@@ -56,32 +56,39 @@ fn read_pkt_line(input: &str) -> IResult<&str, &str> {
     take(len - 4)(rest)
 }
 
-fn validate_pack_header(input: &str) -> IResult<&str, (u32, u32)> {
-    let (rest, pack_file) = read_pkt_line(input)?;
-    assert!(pack_file == "packfile\n");
+mod pack {
+    use super::*;
 
-    // TODO? not sure what this actually is?
-    // [50, 48, 48, 52, 1]
-    let (rest, _unclear) = take(5u8)(rest)?;
-    // println!("{:?}", unclear.bytes());
+    fn u32_from_be_bytes(data: &str) -> u32 {
+        let version = data.as_bytes();
+        let version: [u8; 4] = version.try_into().expect("data expected to be 4 bytes");
+        u32::from_be_bytes(version)
+    }
 
-    let (rest, pack) = take(4u8)(rest)?;
-    assert!(pack == "PACK");
+    pub(crate) fn parse_header(input: &str) -> IResult<&str, (u32, u32)> {
+        let (rest, pack_file) = read_pkt_line(input)?;
+        assert!(pack_file == "packfile\n");
 
-    let (rest, version) = take(4u8)(rest)?;
-    let version = version.as_bytes();
-    let version: [u8; 4] = version.try_into().unwrap();
-    let version = u32::from_be_bytes(version);
-    // println!("{}", version);
+        // TODO? not sure what this actually is?
+        // [50, 48, 48, 52, 1]
+        let (rest, _unclear) = take(5u8)(rest)?;
+        // println!("{:?}", unclear.bytes());
 
-    let (rest, num_objects) = take(4u8)(rest)?;
-    let num_objects = num_objects.as_bytes();
-    let num_objects: [u8; 4] = num_objects.try_into().unwrap();
-    let num_objects = u32::from_be_bytes(num_objects);
-    // println!("{num_objects}");
+        let (rest, pack) = take(4u8)(rest)?;
+        assert!(pack == "PACK");
 
-    Ok((rest, (version, num_objects)))
+        let (rest, version) = take(4u8)(rest)?;
+        let version = u32_from_be_bytes(version);
+        // println!("{}", version);
+
+        let (rest, num_objects) = take(4u8)(rest)?;
+        let num_objects = u32_from_be_bytes(num_objects);
+        // println!("{num_objects}");
+
+        Ok((rest, (version, num_objects)))
+    }
 }
+
 fn validate_header(input: &str) -> IResult<&str, &str> {
     // Clients MUST validate the first five bytes of the response entity matches the
     // regex ^[0-9a-f]{4}#. If this test fails, clients MUST NOT continue.
@@ -236,8 +243,12 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // let mut s = String::new();
     // z.read_to_string(&mut s)?;
 
-    let (_rest, (version, num_objects)) = validate_pack_header(&pack)
-        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+    let (_rest, (version, num_objects)) =
+        pack::parse_header(&pack).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+
+    // TODO for now?
+    assert!(version == 2);
+    println!("pack: {} objects recieved", num_objects);
 
     Ok(())
 }
