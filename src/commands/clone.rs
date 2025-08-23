@@ -10,8 +10,13 @@
 // ls-remote <url> HEAD
 // clone <url> <dir>
 
-use std::{collections::HashSet, env, fs};
+use std::{
+    collections::HashSet,
+    env, fs,
+    io::{BufReader, Read},
+};
 
+use flate2::bufread::ZlibDecoder;
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
@@ -37,6 +42,48 @@ struct Refs {
     refs: Vec<RefSpec>,
 }
 
+fn pkt_line(data: &str) -> Vec<u8> {
+    let len = data.len() + 4; // +4 for the length prefix itself
+    println!("{}", format!("{:04x}", len));
+    let mut packet = format!("{:04x}", len).into_bytes();
+    packet.extend_from_slice(data.as_bytes());
+    packet
+}
+
+fn read_pkt_line(input: &str) -> IResult<&str, &str> {
+    let (rest, len) = take(4u8)(input)?;
+    let len = u16::from_str_radix(len, 16).unwrap();
+    take(len - 4)(rest)
+}
+
+fn validate_pack_header(input: &str) -> IResult<&str, u32> {
+    let (rest, pack_file) = read_pkt_line(input)?;
+    println!("{pack_file}");
+
+    // TODO?
+    let (rest, unclear) = take(5u8)(rest)?;
+    println!("{:?}", unclear.bytes());
+
+    let (rest, pack) = take(4u8)(rest)?;
+    println!("{pack}");
+
+    let (rest, version) = take(4u8)(rest)?;
+    let version = version.as_bytes();
+    let version = u32::from_be_bytes([version[0], version[1], version[2], version[3]]);
+    println!("{}", version);
+
+    let (rest, num_objects) = take(4u8)(rest)?;
+    let num_objects = num_objects.as_bytes();
+    let num_objects = u32::from_be_bytes([
+        num_objects[0],
+        num_objects[1],
+        num_objects[2],
+        num_objects[3],
+    ]);
+    println!("{num_objects}");
+
+    Ok((rest, num_objects))
+}
 fn validate_header(input: &str) -> IResult<&str, &str> {
     // Clients MUST validate the first five bytes of the response entity matches the
     // regex ^[0-9a-f]{4}#. If this test fails, clients MUST NOT continue.
@@ -82,6 +129,10 @@ fn parse_ref_list(input: &str) -> IResult<&str, RefSpec> {
     // 003d9b36649874280c532f7c06f16b7d7c9aa86073c3 refs/heads/main
     // 003e3fcffffcacaf807d6eaf97ce5ac8131fab2a39db refs/pull/1/head
     // 003e48fc09b90b2db56dd7a36e70fc98991086ace882 refs/pull/2/head
+
+    // let (_rest, (refs, _)) = many_till(parse_ref_list, tag("\n"))
+    //     .parse(rest)
+    //     .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
 
     let (rest, _len) = take(4u8)(input)?;
     let (rest, sha) = take(40u8)(rest)?;
@@ -162,13 +213,16 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         "Git-Protocol",
         header::HeaderValue::from_static("version=2"),
     );
+
     // https://git-scm.com/docs/protocol-v2
+    // GIT_TRACE_CURL=1 git clone https://github.com/iff/fleet.git &> out
     // Send data: 0011command=fetch001aagent=git/2.50.1-Linux0016object-format
     // Send data: =sha10001000dthin-pack000fno-progress000dofs-delta0032want 9
     // Send data: b36649874280c532f7c06f16b7d7c9aa86073c3.0032want 9b366498742
     // Send data: 80c532f7c06f16b7d7c9aa86073c3.0009done.0000
     // Info: upload completely sent off: 223 bytes
     let body = format!("0011command=fetch0016object-format=sha10001000fno-progress0032want {}\n0032want {}\n0009done\n0000", refs.head, refs.head);
+
     let response = client
         .post(format!("{url}/git-upload-pack"))
         .headers(headers)
@@ -176,7 +230,16 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         .send()?;
 
     // TODO only the simplest case will we directly get the pack file (clone is probably that)
-    let pack = response.text()?.into_bytes();
+    // https://github.com/git/git/blob/795ea8776befc95ea2becd8020c7a284677b4161/Documentation/gitformat-pack.txt
+    let pack = response.text()?;
+
+    // let data = &pack.into_bytes()[..];
+    // let mut z = ZlibDecoder::new(data);
+    // let mut s = String::new();
+    // z.read_to_string(&mut s)?;
+
+    let (_rest, num_objects) = validate_pack_header(&pack)
+        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     Ok(())
 }
