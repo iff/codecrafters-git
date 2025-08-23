@@ -56,33 +56,31 @@ fn read_pkt_line(input: &str) -> IResult<&str, &str> {
     take(len - 4)(rest)
 }
 
-fn validate_pack_header(input: &str) -> IResult<&str, u32> {
+fn validate_pack_header(input: &str) -> IResult<&str, (u32, u32)> {
     let (rest, pack_file) = read_pkt_line(input)?;
-    println!("{pack_file}");
+    assert!(pack_file == "packfile\n");
 
-    // TODO?
-    let (rest, unclear) = take(5u8)(rest)?;
-    println!("{:?}", unclear.bytes());
+    // TODO? not sure what this actually is?
+    // [50, 48, 48, 52, 1]
+    let (rest, _unclear) = take(5u8)(rest)?;
+    // println!("{:?}", unclear.bytes());
 
     let (rest, pack) = take(4u8)(rest)?;
-    println!("{pack}");
+    assert!(pack == "PACK");
 
     let (rest, version) = take(4u8)(rest)?;
     let version = version.as_bytes();
-    let version = u32::from_be_bytes([version[0], version[1], version[2], version[3]]);
-    println!("{}", version);
+    let version: [u8; 4] = version.try_into().unwrap();
+    let version = u32::from_be_bytes(version);
+    // println!("{}", version);
 
     let (rest, num_objects) = take(4u8)(rest)?;
     let num_objects = num_objects.as_bytes();
-    let num_objects = u32::from_be_bytes([
-        num_objects[0],
-        num_objects[1],
-        num_objects[2],
-        num_objects[3],
-    ]);
-    println!("{num_objects}");
+    let num_objects: [u8; 4] = num_objects.try_into().unwrap();
+    let num_objects = u32::from_be_bytes(num_objects);
+    // println!("{num_objects}");
 
-    Ok((rest, num_objects))
+    Ok((rest, (version, num_objects)))
 }
 fn validate_header(input: &str) -> IResult<&str, &str> {
     // Clients MUST validate the first five bytes of the response entity matches the
@@ -238,7 +236,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // let mut s = String::new();
     // z.read_to_string(&mut s)?;
 
-    let (_rest, num_objects) = validate_pack_header(&pack)
+    let (_rest, (version, num_objects)) = validate_pack_header(&pack)
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     Ok(())
