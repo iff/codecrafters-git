@@ -220,12 +220,15 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     );
 
     // https://git-scm.com/docs/protocol-v2
-    // GIT_TRACE_CURL=1 git clone https://github.com/iff/fleet.git &> out
+    // TODO: could not piece this together from the docs without peeking at a
+    // real output I get when running:
+    //   GIT_TRACE_CURL=1 git clone https://github.com/iff/fleet.git &> out
     // Send data: 0011command=fetch001aagent=git/2.50.1-Linux0016object-format
     // Send data: =sha10001000dthin-pack000fno-progress000dofs-delta0032want 9
     // Send data: b36649874280c532f7c06f16b7d7c9aa86073c3.0032want 9b366498742
     // Send data: 80c532f7c06f16b7d7c9aa86073c3.0009done.0000
     // Info: upload completely sent off: 223 bytes
+    // NOTE not sure why we need this special preamble and why we need to request the want twice?
     let body = format!("0011command=fetch0016object-format=sha10001000fno-progress0032want {}\n0032want {}\n0009done\n0000", refs.head, refs.head);
 
     let response = client
