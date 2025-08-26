@@ -61,9 +61,11 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 mod pack {
-    use std::fmt::Display;
+    use std::{fmt::Display, io::Write};
 
     use nom::error::{Error, ErrorKind};
+
+    use crate::object::{GitObjectWriter, Object};
 
     use super::*;
 
@@ -178,19 +180,48 @@ mod pack {
         uncompressed_length: usize,
         input: &[u8],
     ) -> &[u8] {
+        // Output Format
+
+        // SHA-1     type size  size-in-packfile offset-in-packfile [depth base-SHA-1]
+        //
+        // Column Breakdown
+        //
+        // 1. SHA-1: 40-character hex hash of the object
+        // 2. type: Object type (commit, tree, blob, tag)
+        // 3. size: Uncompressed size in bytes
+        // 4. size-in-packfile: Compressed size in the pack file
+        // 5. offset-in-packfile: Byte offset where object starts in pack
+        // 6. depth (for deltas): How many delta links from base object
+        // 7. base-SHA-1 (for deltas): SHA-1 of the base object
+
         let mut rest = input;
         match object_type {
             PackObjectType::Commit => {
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
                 z.read_exact(&mut data).unwrap();
+                let compressed_size = z.total_in() as usize;
 
                 // TODO serialize commit using object
+                // TODO do we need to uncompress to hash?
+                // sha = hashed content
+                // TODO do we need to prepend the commit header
+                let buf = Vec::new();
+                let mut writer = GitObjectWriter::new(buf);
+                writer
+                    .write_all(format!("commit {}\0", data.len()).as_bytes())
+                    .unwrap();
+                writer.write_all(&data[..]).unwrap();
+                let (compressed, hash) = writer.finish().unwrap();
+                let commit = Object::new_commit(uncompressed_length, hash, &compressed);
+                commit.write().unwrap();
 
-                let compressed_size = z.total_in() as usize;
-                let sha = "xx";
+                // TODO
                 let offset = 0;
-                println!("{sha} commit {uncompressed_length} {compressed_size} {offset}");
+                println!(
+                    "{} commit {uncompressed_length} {compressed_size} {offset}",
+                    hex::encode(hash)
+                );
                 &rest[compressed_size..]
             }
             PackObjectType::ReferenceDelta => {
@@ -219,7 +250,10 @@ mod pack {
                 let compressed_size = z.total_in() as usize;
                 let offset = 0.0;
                 // seems to be off by a bit after this?
-                println!("xx commit {uncompressed_length} {compressed_size} {offset} {}", hex::encode(sha));
+                println!(
+                    "xx commit {uncompressed_length} {compressed_size} {offset} {}",
+                    hex::encode(sha)
+                );
                 &rest[compressed_size..]
             }
             _ => {
