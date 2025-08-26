@@ -62,7 +62,7 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 mod pack {
     use std::{fmt::Display, io::Write};
 
-    use nom::error::{Error, ErrorKind};
+    use nom::error::Error;
 
     use crate::object::{GitObjectWriter, Object};
 
@@ -174,10 +174,41 @@ mod pack {
         })(input)
     }
 
+    pub(crate) fn parse_var_len(input: &[u8]) -> IResult<&[u8], usize, Error<&[u8]>> {
+        use nom::bits::bits;
+        use nom::bits::complete::take as take_bits;
+
+        // error handling a bit cumbersom here
+        bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+            let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
+            let (rest, size): (_, u8) = take_bits(7u8)(rest)?;
+            let mut size = size as usize;
+
+            let mut shift = 4;
+            let mut cont = cont;
+            let mut rest = rest;
+            // cont == 0 marks the end
+            while cont == 1 {
+                let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
+                cont = new_cont;
+                let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
+                rest = new_rest;
+
+                // TODO update size
+                size |= (size_bits as usize) << shift;
+                shift += 7;
+            }
+            assert!(cont == 0);
+
+            Ok((rest, size))
+        })(input)
+    }
+
     pub(crate) fn parse_object(
         object_type: PackObjectType,
         uncompressed_length: usize,
         input: &[u8],
+        offset: usize,
     ) -> &[u8] {
         // Output Format
 
@@ -194,6 +225,11 @@ mod pack {
         // 7. base-SHA-1 (for deltas): SHA-1 of the base object
 
         // TODO seems like we are alwyas off by 2 bytes?
+        //
+        // cae48db0e71c5c66f1eded4ffeded6e6242e32e8 commit 239 162 12
+        // baf2fc1f6696bffae07d12bc681fdbeef25ed978 commit 1164 890 174
+        // 76946a4f274f6d7832828600cdb9971252aa1128 commit 1174 566 1064
+        // 9b36649874280c532f7c06f16b7d7c9aa86073c3 commit 239 161 1630
 
         let mut rest = input;
         match object_type {
@@ -213,7 +249,7 @@ mod pack {
                 writer
                     .write_all(format!("commit {}\0", data.len()).as_bytes())
                     .unwrap();
-                writer.write_all(&data[..]).unwrap();
+                writer.write_all(&data).unwrap();
                 let (compressed, hash) = writer.finish().unwrap();
 
                 // TODO seems to fail - why? hast seems to be fine (at least for the ones I
@@ -222,11 +258,10 @@ mod pack {
                 let commit = Object::new_commit(uncompressed_length, hash, &compressed);
                 commit.write().unwrap();
 
-                // TODO
-                let offset = 0;
                 println!(
-                    "{} commit {uncompressed_length} {compressed_size} {offset}",
-                    hex::encode(hash)
+                    "{} commit {uncompressed_length} {} {offset}",
+                    hex::encode(hash),
+                    compressed_size + 2,
                 );
                 &rest[compressed_size..]
             }
@@ -241,7 +276,6 @@ mod pack {
             }
             PackObjectType::ReferenceDelta => {
                 let sha = &rest[..20];
-                println!("{}", hex::encode(sha));
                 rest = &rest[20..];
 
                 let mut z = ZlibDecoder::new(rest);
@@ -252,21 +286,38 @@ mod pack {
 
                 // The delta data contains:
                 // 1. Source size (variable-length encoded)
+                let (rest_decompressed, src_size) = parse_var_len(&data).unwrap();
+                println!("{src_size}");
+
                 // 2. Target size (variable-length encoded)
+                let (rest_decompressed, target_size) = parse_var_len(rest_decompressed).unwrap();
+                println!("{target_size}");
+
                 // 3. Delta instructions (copy/insert commands)
-                //
-                // Delta Instructions
-                //
+                use nom::bits::bits;
+                use nom::bits::complete::take as take_bits;
+                let (_, (command, offset_or_data)) =
+                    bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+                        let (rest, command): (_, u8) = take_bits(1u8)(input)?;
+                        let (rest, offset_or_data): (_, u8) = take_bits(7u8)(rest)?;
+                        Ok((rest, (command, offset_or_data)))
+                    })(rest_decompressed)
+                    .unwrap();
+
                 // - Copy command: 1xxxxxxx (bit 7 set)
                 //   - Bits specify offset and size from base object
                 // - Insert command: 0xxxxxxx (bit 7 clear)
                 //   - Following x bytes are literal data to insert
+                println!("{command}, {:02x}", offset_or_data);
+                if command == 0 {
+                    let data = offset_or_data;
+                    // let object = Object::from_hash(sha);
+                }
 
                 let compressed_size = z.total_in() as usize;
-                let offset = 0.0;
-                // seems to be off by a bit after this?
                 println!(
-                    "xx commit {uncompressed_length} {compressed_size} {offset} {}",
+                    "xx commit {uncompressed_length} {} {offset} {}",
+                    compressed_size + 20 + 2,
                     hex::encode(sha)
                 );
                 &rest[compressed_size..]
@@ -435,10 +486,15 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     println!("pack: {} objects recieved", num_objects);
 
     let mut rest = rest;
+    // just to mimic the output of git verify-pack as debug help
+    let mut offset = 12;
     for _ in 0..num_objects {
+        let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-        let new_rest = pack::parse_object(object_type, length, new_rest);
+
+        let new_rest = pack::parse_object(object_type, length, new_rest, offset);
+        offset += before - new_rest.len();
         rest = new_rest;
     }
 
