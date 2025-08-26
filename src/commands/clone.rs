@@ -45,7 +45,6 @@ struct Refs {
 #[allow(dead_code)]
 fn pkt_line(data: &str) -> Vec<u8> {
     let len = data.len() + 4; // +4 for the length prefix itself
-    println!("{len:04x}");
     let mut packet = format!("{:04x}", len).into_bytes();
     packet.extend_from_slice(data.as_bytes());
     packet
@@ -194,6 +193,8 @@ mod pack {
         // 6. depth (for deltas): How many delta links from base object
         // 7. base-SHA-1 (for deltas): SHA-1 of the base object
 
+        // TODO seems like we are alwyas off by 2 bytes?
+
         let mut rest = input;
         match object_type {
             PackObjectType::Commit => {
@@ -206,6 +207,7 @@ mod pack {
                 // TODO do we need to uncompress to hash?
                 // sha = hashed content
                 // TODO do we need to prepend the commit header
+                // TODO all the unwraps
                 let buf = Vec::new();
                 let mut writer = GitObjectWriter::new(buf);
                 writer
@@ -213,6 +215,10 @@ mod pack {
                     .unwrap();
                 writer.write_all(&data[..]).unwrap();
                 let (compressed, hash) = writer.finish().unwrap();
+
+                // TODO seems to fail - why? hast seems to be fine (at least for the ones I
+                // assert!(compressed == rest[..compressed_size]);
+
                 let commit = Object::new_commit(uncompressed_length, hash, &compressed);
                 commit.write().unwrap();
 
@@ -223,6 +229,15 @@ mod pack {
                     hex::encode(hash)
                 );
                 &rest[compressed_size..]
+            }
+            PackObjectType::Tree => {
+                panic!("not implemented");
+            }
+            PackObjectType::Blob => {
+                panic!("not implemented");
+            }
+            PackObjectType::OffsetDelta => {
+                panic!("not implemented");
             }
             PackObjectType::ReferenceDelta => {
                 let sha = &rest[..20];
@@ -255,14 +270,6 @@ mod pack {
                     hex::encode(sha)
                 );
                 &rest[compressed_size..]
-            }
-            _ => {
-                // for debugging just assert
-                panic!("unknown pack object type");
-                // Err(nom::Err::Error(Error {
-                //     input,
-                //     code: ErrorKind::NoneOf,
-                // }))
             }
         }
     }
@@ -431,9 +438,6 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     for _ in 0..num_objects {
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-
-        println!("type: {object_type}, length: {length}");
-
         let new_rest = pack::parse_object(object_type, length, new_rest);
         rest = new_rest;
     }
