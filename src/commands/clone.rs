@@ -63,10 +63,7 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 mod pack {
     use std::fmt::Display;
 
-    use nom::{
-        combinator::map_res,
-        error::{Error, ErrorKind},
-    };
+    use nom::error::{Error, ErrorKind};
 
     use super::*;
 
@@ -180,31 +177,58 @@ mod pack {
         object_type: PackObjectType,
         uncompressed_length: usize,
         input: &[u8],
-    ) -> IResult<&[u8], ()> {
+    ) -> &[u8] {
+        let mut rest = input;
         match object_type {
             PackObjectType::Commit => {
-                let mut z = ZlibDecoder::new(input);
-                let mut commit = vec![0u8; uncompressed_length];
-                z.read_exact(&mut commit)
-                    .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::MapRes)))?;
+                let mut z = ZlibDecoder::new(rest);
+                let mut data = vec![0u8; uncompressed_length];
+                z.read_exact(&mut data).unwrap();
 
-                // TODO serialize commit
+                // TODO serialize commit using object
 
                 let compressed_size = z.total_in() as usize;
-                let rest = &input[compressed_size..];
-                Ok((rest, ()))
+                let sha = "xx";
+                let offset = 0;
+                println!("{sha} commit {uncompressed_length} {compressed_size} {offset}");
+                &rest[compressed_size..]
             }
-            // PackObjectType::OffsetDelta => {
-            //     let (rest, _data) = take(uncompressed_length)(input)?;
-            //     Ok((rest, ()))
-            // }
+            PackObjectType::ReferenceDelta => {
+                let sha = &rest[..20];
+                println!("{}", hex::encode(sha));
+                rest = &rest[20..];
+
+                let mut z = ZlibDecoder::new(rest);
+                let mut data = vec![0u8; uncompressed_length];
+                z.read_exact(&mut data).unwrap();
+
+                // Delta Format (after decompression)
+
+                // The delta data contains:
+                // 1. Source size (variable-length encoded)
+                // 2. Target size (variable-length encoded)
+                // 3. Delta instructions (copy/insert commands)
+                //
+                // Delta Instructions
+                //
+                // - Copy command: 1xxxxxxx (bit 7 set)
+                //   - Bits specify offset and size from base object
+                // - Insert command: 0xxxxxxx (bit 7 clear)
+                //   - Following x bytes are literal data to insert
+
+                let compressed_size = z.total_in() as usize;
+                let offset = 0.0;
+                // seems to be off by a bit after this?
+                println!("xx commit {uncompressed_length} {compressed_size} {offset} {}", hex::encode(sha));
+                &rest[compressed_size..]
+            }
             _ => {
                 // for debugging just assert
-                assert!(false);
-                Err(nom::Err::Error(Error {
-                    input,
-                    code: ErrorKind::NoneOf,
-                }))
+                panic!("unknown pack object type");
+                // Err(nom::Err::Error(Error {
+                //     input,
+                //     code: ErrorKind::NoneOf,
+                // }))
             }
         }
     }
@@ -376,9 +400,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
 
         println!("type: {object_type}, length: {length}");
 
-        let (new_rest, _) = pack::parse_object(object_type, length, new_rest)
-            .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-
+        let new_rest = pack::parse_object(object_type, length, new_rest);
         rest = new_rest;
     }
 
