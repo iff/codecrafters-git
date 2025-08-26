@@ -178,26 +178,34 @@ mod pack {
 
     pub(crate) fn parse_object(
         object_type: PackObjectType,
-        length: usize,
+        uncompressed_length: usize,
         input: &[u8],
-    ) -> IResult<&[u8], &[u8]> {
+    ) -> IResult<&[u8], ()> {
         match object_type {
             PackObjectType::Commit => {
-                println!("parsing pack commit");
-                let (rest, compressed_data) = take(length)(input)?;
-                let mut z = ZlibDecoder::new(compressed_data);
-                let mut s = String::new();
-                z.read_to_string(&mut s)
+                let mut z = ZlibDecoder::new(input);
+                let mut commit = vec![0u8; uncompressed_length];
+                z.read_exact(&mut commit)
                     .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::MapRes)))?;
 
-                // TODO serialize
-                println!("{s}");
-                Ok((rest, compressed_data))
+                // TODO serialize commit
+
+                let compressed_size = z.total_in() as usize;
+                let rest = &input[compressed_size..];
+                Ok((rest, ()))
             }
-            _ => Err(nom::Err::Error(Error {
-                input,
-                code: ErrorKind::NoneOf,
-            })),
+            // PackObjectType::OffsetDelta => {
+            //     let (rest, _data) = take(uncompressed_length)(input)?;
+            //     Ok((rest, ()))
+            // }
+            _ => {
+                // for debugging just assert
+                assert!(false);
+                Err(nom::Err::Error(Error {
+                    input,
+                    code: ErrorKind::NoneOf,
+                }))
+            }
         }
     }
 }
@@ -361,13 +369,18 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     assert!(version == 2);
     println!("pack: {} objects recieved", num_objects);
 
-    let (rest, (object_type, length)) = pack::parse_object_header(rest)
-        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+    let mut rest = rest;
+    for _ in 0..num_objects {
+        let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
+            .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
-    println!("type: {object_type}, length: {length}");
+        println!("type: {object_type}, length: {length}");
 
-    let (rest, data) = pack::parse_object(object_type, length, rest)
-        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        let (new_rest, _) = pack::parse_object(object_type, length, new_rest)
+            .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+
+        rest = new_rest;
+    }
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer
