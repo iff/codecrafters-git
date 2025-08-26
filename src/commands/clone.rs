@@ -63,7 +63,51 @@ fn read_pkt_line(input: &str) -> IResult<&str, &str> {
 }
 
 mod pack {
+    use std::fmt::Display;
+
+    use nom::error::Error;
+
     use super::*;
+
+    pub(crate) enum PackObjectType {
+        Commit = 1,
+        Tree = 2,
+        Blob = 3,
+        OffsetDelta = 6,
+        ReferenceDelta = 7,
+    }
+
+    impl Display for PackObjectType {
+        fn fmt(
+            &self,
+            fmt: &mut std::fmt::Formatter<'_>,
+        ) -> std::result::Result<(), std::fmt::Error> {
+            match self {
+                PackObjectType::Commit => write!(fmt, "Commit")?,
+                PackObjectType::Tree => write!(fmt, "Tree")?,
+                PackObjectType::Blob => write!(fmt, "Blob")?,
+                PackObjectType::OffsetDelta => write!(fmt, "OffsetDelta")?,
+                PackObjectType::ReferenceDelta => write!(fmt, "ReferenceDelta")?,
+            }
+            Ok(())
+        }
+    }
+
+    impl TryFrom<u8> for PackObjectType {
+        // FIXME need a cleaner error type here
+        type Error = &'static str;
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                1 => Ok(PackObjectType::Commit),
+                2 => Ok(PackObjectType::Tree),
+                3 => Ok(PackObjectType::Blob),
+                6 => Ok(PackObjectType::OffsetDelta),
+                7 => Ok(PackObjectType::ReferenceDelta),
+                _ => Err("unknown pack object type"),
+            }
+        }
+    }
 
     fn u32_from_be_bytes(data: &str) -> u32 {
         let version = data.as_bytes();
@@ -93,6 +137,55 @@ mod pack {
 
         Ok((rest, (version, num_objects)))
     }
+
+    pub(crate) fn parse_object_header(
+        input: &[u8],
+    ) -> IResult<&[u8], (PackObjectType, usize), Error<&[u8]>> {
+        // Pack Objects
+        // - Variable-length size encoding
+        // - Object type (3 bits) + size info
+        // - Compressed data (individually zlib deflated)
+
+        use nom::bits::bits;
+        use nom::bits::complete::take as take_bits;
+
+        // error handling a bit cumbersom here
+        bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+            let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
+            let (rest, object_type): (_, u8) = take_bits(3u8)(rest)?;
+            let (rest, size): (_, u8) = take_bits(4u8)(rest)?;
+            let mut size = size as usize;
+
+            let mut shift = 4;
+            let mut cont = cont;
+            let mut rest = rest;
+            // cont == 0 marks the end
+            while cont == 1 {
+                let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
+                cont = new_cont;
+                let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
+                rest = new_rest;
+
+                // TODO update size
+                size |= (size_bits as usize) << shift;
+                shift += 7;
+            }
+            assert!(cont == 0);
+
+            // TODO panic here?
+            let object_type: PackObjectType = object_type.try_into().unwrap();
+            Ok((rest, (object_type, size)))
+        })(input)
+    }
+
+    // pub(crate) fn parse_object(
+    //     input: &[u8],
+    // ) -> IResult<&[u8], (PackObjectType, usize), Error<&[u8]>> {
+    //     // let data = &pack.into_bytes()[..];
+    //     // let mut z = ZlibDecoder::new(data);
+    //     // let mut s = String::new();
+    //     // z.read_to_string(&mut s)?;
+    // }
 }
 
 fn validate_header(input: &str) -> IResult<&str, &str> {
@@ -247,17 +340,23 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // https://github.com/git/git/blob/795ea8776befc95ea2becd8020c7a284677b4161/Documentation/gitformat-pack.txt
     let pack = response.text()?;
 
-    // let data = &pack.into_bytes()[..];
-    // let mut z = ZlibDecoder::new(data);
-    // let mut s = String::new();
-    // z.read_to_string(&mut s)?;
+    // TODO maybe convert to bytes here!
+    // let pack = pack.as_bytes()
 
-    let (_rest, (version, num_objects)) =
+    let (rest, (version, num_objects)) =
         pack::parse_header(&pack).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     // TODO for now?
     assert!(version == 2);
     println!("pack: {} objects recieved", num_objects);
+
+    let (rest, (object_type, length)) = pack::parse_object_header(rest.as_bytes())
+        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+
+    println!("type: {object_type}, length: {length}");
+
+    // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
+    // TODO verify using something like our object writer
 
     Ok(())
 }
