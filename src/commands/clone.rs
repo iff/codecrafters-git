@@ -12,11 +12,12 @@
 
 use std::{
     collections::HashSet,
-    env, fs,
-    io::{BufReader, Read},
+    env,
+    fs,
+    // io::{BufReader, Read},
 };
 
-use flate2::bufread::ZlibDecoder;
+// use flate2::bufread::ZlibDecoder;
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
@@ -30,21 +31,26 @@ use reqwest::header;
 use crate::commands::init;
 
 struct RefSpec {
+    #[allow(dead_code)]
     sha: String, // [u8; 40],
+    #[allow(dead_code)]
     name: String,
 }
 
 struct Refs {
     head: String, //[u8; 40],
     // TODO what makes sense? see later
+    #[allow(dead_code)]
     capabilities: HashSet<String>,
     // TODO Map name -> sha?
+    #[allow(dead_code)]
     refs: Vec<RefSpec>,
 }
 
+#[allow(dead_code)]
 fn pkt_line(data: &str) -> Vec<u8> {
     let len = data.len() + 4; // +4 for the length prefix itself
-    println!("{}", format!("{:04x}", len));
+    println!("{len:04x}");
     let mut packet = format!("{:04x}", len).into_bytes();
     packet.extend_from_slice(data.as_bytes());
     packet
