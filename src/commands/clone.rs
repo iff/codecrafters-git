@@ -56,9 +56,12 @@ fn pkt_line(data: &str) -> Vec<u8> {
     packet
 }
 
-fn read_pkt_line(input: &str) -> IResult<&str, &str> {
+fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    // NOTE the length is encoded as ASCII hex characters and not binary
+    // I guess it makes it more readable when debugging and sidesteps endianness issue?
+    // still need to find a better way to write this
     let (rest, len) = take(4u8)(input)?;
-    let len = u16::from_str_radix(len, 16).unwrap();
+    let len = u16::from_str_radix(std::str::from_utf8(len).unwrap(), 16).unwrap();
     take(len - 4)(rest)
 }
 
@@ -109,31 +112,28 @@ mod pack {
         }
     }
 
-    fn u32_from_be_bytes(data: &str) -> u32 {
-        let version = data.as_bytes();
-        let version: [u8; 4] = version.try_into().expect("data expected to be 4 bytes");
-        u32::from_be_bytes(version)
+    fn u32_from_be_bytes(data: &[u8]) -> u32 {
+        let data: [u8; 4] = data.try_into().expect("data expected to be 4 bytes");
+        u32::from_be_bytes(data)
     }
 
-    pub(crate) fn parse_header(input: &str) -> IResult<&str, (u32, u32)> {
+    pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u8]>> {
         let (rest, pack_file) = read_pkt_line(input)?;
-        assert!(pack_file == "packfile\n");
+        assert!(pack_file == "packfile\n".as_bytes());
 
         // TODO? not sure what this actually is?
         // [50, 48, 48, 52, 1]
-        let (rest, _unclear) = take(5u8)(rest)?;
-        // println!("{:?}", unclear.bytes());
+        let (rest, unclear) = take(5u8)(rest)?;
+        println!("{:?}", unclear);
 
         let (rest, pack) = take(4u8)(rest)?;
-        assert!(pack == "PACK");
+        assert!(pack == "PACK".as_bytes());
 
         let (rest, version) = take(4u8)(rest)?;
         let version = u32_from_be_bytes(version);
-        // println!("{}", version);
 
         let (rest, num_objects) = take(4u8)(rest)?;
         let num_objects = u32_from_be_bytes(num_objects);
-        // println!("{num_objects}");
 
         Ok((rest, (version, num_objects)))
     }
@@ -338,10 +338,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
 
     // TODO only the simplest case will we directly get the pack file (clone is probably that)
     // https://github.com/git/git/blob/795ea8776befc95ea2becd8020c7a284677b4161/Documentation/gitformat-pack.txt
-    let pack = response.text()?;
-
-    // TODO maybe convert to bytes here!
-    // let pack = pack.as_bytes()
+    let pack = response.bytes()?;
 
     let (rest, (version, num_objects)) =
         pack::parse_header(&pack).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
@@ -350,7 +347,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     assert!(version == 2);
     println!("pack: {} objects recieved", num_objects);
 
-    let (rest, (object_type, length)) = pack::parse_object_header(rest.as_bytes())
+    let (rest, (object_type, length)) = pack::parse_object_header(rest)
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     println!("type: {object_type}, length: {length}");
