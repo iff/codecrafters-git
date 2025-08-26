@@ -10,14 +10,9 @@
 // ls-remote <url> HEAD
 // clone <url> <dir>
 
-use std::{
-    collections::HashSet,
-    env,
-    fs,
-    // io::{BufReader, Read},
-};
+use std::{collections::HashSet, env, fs, io::Read};
 
-// use flate2::bufread::ZlibDecoder;
+use flate2::bufread::ZlibDecoder;
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
@@ -68,7 +63,10 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 mod pack {
     use std::fmt::Display;
 
-    use nom::error::Error;
+    use nom::{
+        combinator::map_res,
+        error::{Error, ErrorKind},
+    };
 
     use super::*;
 
@@ -123,8 +121,8 @@ mod pack {
 
         // TODO? not sure what this actually is?
         // [50, 48, 48, 52, 1]
-        let (rest, unclear) = take(5u8)(rest)?;
-        println!("{:?}", unclear);
+        let (rest, _unclear) = take(5u8)(rest)?;
+        // println!("{:?}", unclear);
 
         let (rest, pack) = take(4u8)(rest)?;
         assert!(pack == "PACK".as_bytes());
@@ -178,14 +176,30 @@ mod pack {
         })(input)
     }
 
-    // pub(crate) fn parse_object(
-    //     input: &[u8],
-    // ) -> IResult<&[u8], (PackObjectType, usize), Error<&[u8]>> {
-    //     // let data = &pack.into_bytes()[..];
-    //     // let mut z = ZlibDecoder::new(data);
-    //     // let mut s = String::new();
-    //     // z.read_to_string(&mut s)?;
-    // }
+    pub(crate) fn parse_object(
+        object_type: PackObjectType,
+        length: usize,
+        input: &[u8],
+    ) -> IResult<&[u8], &[u8]> {
+        match object_type {
+            PackObjectType::Commit => {
+                println!("parsing pack commit");
+                let (rest, compressed_data) = take(length)(input)?;
+                let mut z = ZlibDecoder::new(compressed_data);
+                let mut s = String::new();
+                z.read_to_string(&mut s)
+                    .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::MapRes)))?;
+
+                // TODO serialize
+                println!("{s}");
+                Ok((rest, compressed_data))
+            }
+            _ => Err(nom::Err::Error(Error {
+                input,
+                code: ErrorKind::NoneOf,
+            })),
+        }
+    }
 }
 
 fn validate_header(input: &str) -> IResult<&str, &str> {
@@ -351,6 +365,9 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     println!("type: {object_type}, length: {length}");
+
+    let (rest, data) = pack::parse_object(object_type, length, rest)
+        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer
