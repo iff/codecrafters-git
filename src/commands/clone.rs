@@ -230,6 +230,8 @@ mod pack {
         // baf2fc1f6696bffae07d12bc681fdbeef25ed978 commit 1164 890 174
         // 76946a4f274f6d7832828600cdb9971252aa1128 commit 1174 566 1064
         // 9b36649874280c532f7c06f16b7d7c9aa86073c3 commit 239 161 1630
+        // ...
+        // 48fc09b90b2db56dd7a36e70fc98991086ace882 commit 258 216 3637 1 cb8a2b1e06668f3d9bd35879c41c28f5248ae720
 
         let mut rest = input;
         match object_type {
@@ -252,9 +254,6 @@ mod pack {
                 writer.write_all(&data).unwrap();
                 let (compressed, hash) = writer.finish().unwrap();
 
-                // TODO seems to fail - why? hast seems to be fine (at least for the ones I
-                // assert!(compressed == rest[..compressed_size]);
-
                 let commit = Object::new_commit(uncompressed_length, hash, &compressed);
                 commit.write().unwrap();
 
@@ -275,32 +274,33 @@ mod pack {
                 panic!("not implemented");
             }
             PackObjectType::ReferenceDelta => {
-                let sha = &rest[..20];
+                let base_sha = &rest[..20];
                 rest = &rest[20..];
 
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
                 z.read_exact(&mut data).unwrap();
 
+                // TODO can be multiple commands here!
+                // [src_size][target_size][cmd1: add 10 bytes][data1][cmd2: copy from offset 5, len3][cmd3: add 2 bytes][data3]
+
                 // Delta Format (after decompression)
 
                 // The delta data contains:
                 // 1. Source size (variable-length encoded)
                 let (rest_decompressed, src_size) = parse_var_len(&data).unwrap();
-                println!("{src_size}");
 
                 // 2. Target size (variable-length encoded)
                 let (rest_decompressed, target_size) = parse_var_len(rest_decompressed).unwrap();
-                println!("{target_size}");
 
                 // 3. Delta instructions (copy/insert commands)
                 use nom::bits::bits;
                 use nom::bits::complete::take as take_bits;
-                let (_, (command, offset_or_data)) =
+                let (rest_decompressed, (command, offset_or_len)) =
                     bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
                         let (rest, command): (_, u8) = take_bits(1u8)(input)?;
-                        let (rest, offset_or_data): (_, u8) = take_bits(7u8)(rest)?;
-                        Ok((rest, (command, offset_or_data)))
+                        let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
+                        Ok((rest, (command, offset_or_len)))
                     })(rest_decompressed)
                     .unwrap();
 
@@ -308,17 +308,50 @@ mod pack {
                 //   - Bits specify offset and size from base object
                 // - Insert command: 0xxxxxxx (bit 7 clear)
                 //   - Following x bytes are literal data to insert
-                println!("{command}, {:02x}", offset_or_data);
-                if command == 0 {
-                    let data = offset_or_data;
-                    // let object = Object::from_hash(sha);
-                }
+                let sha = if command == 0 {
+                    // +----------+============+
+                    // | 0xxxxxxx |    data    |
+                    // +----------+============+
+                    let len = offset_or_len as usize;
+                    println!("src = {src_size}, target = {target_size}, len = {len} and total remaining = {}", rest_decompressed.len());
+                    let new_data = &rest_decompressed[..len];
+
+                    let object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
+                    let compressed = object.compressed;
+                    let mut z = ZlibDecoder::new(&compressed[..]);
+                    let mut data = Vec::new();
+                    z.read_to_end(&mut data).unwrap();
+                    // TODO should be source size
+                    println!(
+                        "original commit len = {} (and compressed = {})",
+                        data.len(),
+                        compressed.len()
+                    );
+
+                    data.extend(new_data);
+
+                    let buf = Vec::new();
+                    let mut writer = GitObjectWriter::new(buf);
+                    writer.write_all(&data).unwrap();
+                    let (_compressed, hash) = writer.finish().unwrap();
+
+                    // final object size should be target
+
+                    hex::encode(hash)
+                } else if command == 1 {
+                    // +----------+---------+---------+---------+---------+-------+-------+-------+
+                    // | 1xxxxxxx | offset1 | offset2 | offset3 | offset4 | size1 | size2 | size3 |
+                    // +----------+---------+---------+---------+---------+-------+-------+-------+
+                    panic!("not implemented");
+                } else {
+                    panic!("unknown command in delta encoding");
+                };
 
                 let compressed_size = z.total_in() as usize;
                 println!(
-                    "xx commit {uncompressed_length} {} {offset} {}",
+                    "{sha} commit {uncompressed_length} {} {offset} {}",
                     compressed_size + 20 + 2,
-                    hex::encode(sha)
+                    hex::encode(base_sha)
                 );
                 &rest[compressed_size..]
             }
