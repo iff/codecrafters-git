@@ -184,7 +184,7 @@ mod pack {
             let (rest, size): (_, u8) = take_bits(7u8)(rest)?;
             let mut size = size as usize;
 
-            let mut shift = 4;
+            let mut shift = 7;
             let mut cont = cont;
             let mut rest = rest;
             // cont == 0 marks the end
