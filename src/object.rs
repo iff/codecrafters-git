@@ -15,7 +15,14 @@ pub(crate) fn to_stdout(content: String) -> anyhow::Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[derive(PartialEq)]
+// fn hash_to_sized()
+// let hash: [u8; 20] = hasher
+//     .finalize()
+//     .to_vec()
+//     .try_into()
+//     .map_err(|v: Vec<u8>| anyhow::Error::msg("hash has to have length 20"))?;
+
+#[derive(Clone, PartialEq)]
 pub(crate) enum ObjectType {
     #[allow(dead_code)]
     Commit,
@@ -98,6 +105,15 @@ pub(crate) struct Object {
 }
 
 impl Object {
+    pub fn new_blob(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
+        Object {
+            object_type: ObjectType::Blob,
+            size,
+            hash,
+            compressed: Vec::from(compressed),
+        }
+    }
+
     pub fn new_tree(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
         Object {
             object_type: ObjectType::Tree,
@@ -110,6 +126,25 @@ impl Object {
     pub fn new_commit(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
         Object {
             object_type: ObjectType::Commit,
+            size,
+            hash,
+            compressed: Vec::from(compressed),
+        }
+    }
+
+    pub fn from_pack(object_type: &ObjectType, data: &[u8]) -> Self {
+        // TODO ugly that we need to decompress and compress again
+        let size = data.len();
+        let buf = Vec::new();
+        let mut writer = GitObjectWriter::new(buf);
+        writer
+            .write_all(format!("blob {}\0", size).as_bytes())
+            .unwrap();
+        writer.write_all(&data).unwrap();
+        let (compressed, hash) = writer.finish().unwrap();
+
+        Object {
+            object_type: object_type.clone(),
             size,
             hash,
             compressed: Vec::from(compressed),

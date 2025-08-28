@@ -60,11 +60,14 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 mod pack {
-    use std::{fmt::Display, io::Write};
+    use std::{
+        fmt::Display,
+        io::{BufRead, BufReader, Write},
+    };
 
     use nom::error::Error;
 
-    use crate::object::{GitObjectWriter, Object};
+    use crate::object::{GitObjectWriter, Object, ObjectType};
 
     use super::*;
 
@@ -104,6 +107,18 @@ mod pack {
                 6 => Ok(PackObjectType::OffsetDelta),
                 7 => Ok(PackObjectType::ReferenceDelta),
                 _ => Err("unknown pack object type"),
+            }
+        }
+    }
+
+    impl Into<ObjectType> for PackObjectType {
+        fn into(self) -> ObjectType {
+            match self {
+                PackObjectType::Commit => ObjectType::Commit,
+                PackObjectType::Tree => ObjectType::Tree,
+                PackObjectType::Blob => ObjectType::Blob,
+                PackObjectType::OffsetDelta => panic!("no offset delta object type"),
+                PackObjectType::ReferenceDelta => panic!("no ref delta object type"),
             }
         }
     }
@@ -221,129 +236,23 @@ mod pack {
 
         let mut rest = input;
         match object_type {
-            PackObjectType::Commit => {
-                let restl = rest.len();
-                // println!("{:08b}", rest[0]);
-                // println!("{:08b}", rest[1]);
-                let mut z = ZlibDecoder::new(rest);
-                // let mut data = vec![0u8; uncompressed_length];
-
-                let mut data = if uncompressed_length == 235 {
-                    println!("{:?}", &rest[..161]);
-                    vec![0u8; 235]
-                } else {
-                    vec![0u8; uncompressed_length]
-                };
-                // let mut data = vec![0u8; uncompressed_length];
-                // // TODO here we fail at some point
-                // ZlibDecoder::new(rest).read_to_end(&mut data)?
-                match z.read_exact(&mut data) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let compressed_size = z.total_in() as usize;
-                        println!("{:?}", e);
-                        println!("trying to read {uncompressed_length} bytes, {restl} remaining");
-                        println!("read {} bytes", data.len());
-                        println!("{:?}", data);
-                        println!("{compressed_size}");
-                        panic!("");
-                    }
-                }
-
-                // let mut data = Vec::new();
-                // let mut chunk = vec![0u8, 1];
-                // println!("{}", chunk.len());
-                // let mut total_read = 0;
-                // while total_read < uncompressed_length {
-                //     match z.read(&mut chunk) {
-                //         Ok(0) => break, // EOF reached
-                //         Ok(n) => {
-                //             data.push(chunk[0]);
-                //             total_read += n;
-                //             // println!("{n} read, {uncompressed_length} expected");
-                //         }
-                //         Err(e) => {
-                //             println!("{:?}", e);
-                //             panic!("");
-                //         }
-                //     }
-                // }
-                //
-                // if total_read != uncompressed_length {
-                //     panic!("");
-                // }
-
-                let compressed_size = z.total_in() as usize;
-
-                // TODO serialize commit using object
-                // TODO do we need to uncompress to hash?
-                // sha = hashed content
-                // TODO all the unwraps
-                let buf = Vec::new();
-                let mut writer = GitObjectWriter::new(buf);
-                writer
-                    .write_all(format!("commit {}\0", data.len()).as_bytes())
-                    .unwrap();
-                writer.write_all(&data).unwrap();
-                let (compressed, hash) = writer.finish().unwrap();
-
-                let commit = Object::new_commit(uncompressed_length, hash, &compressed);
-                commit.write().unwrap();
-
-                println!(
-                    "{} commit {uncompressed_length} {} {offset}",
-                    hex::encode(hash),
-                    compressed_size + 2,
-                );
-                &rest[compressed_size..]
-            }
-            PackObjectType::Tree => {
+            pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
-                match z.read_exact(&mut data) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let compressed_size = z.total_in() as usize;
-                        println!("{:?}", e);
-                        println!("trying to read {uncompressed_length} bytes");
-                        println!("read {} bytes", data.len());
-                        println!("{:?}", data);
-                        println!("{compressed_size}");
-                        panic!("");
-                    }
-                }
+                z.read_exact(&mut data).unwrap();
 
                 let compressed_size = z.total_in() as usize;
-
-                // TODO left over data?
-                let l = data.len() - 20;
-                println!("{:?}", &data[l..]);
-                // println!(
-                //     "{:?}",
-                //     std::str::from_utf8(&data[data.len() - 20..]).unwrap()
-                // );
-
-                let buf = Vec::new();
-                let mut writer = GitObjectWriter::new(buf);
-                writer
-                    .write_all(format!("tree {}\0", l).as_bytes())
-                    .unwrap();
-                writer.write_all(&data[..l]).unwrap();
-                let (compressed, hash) = writer.finish().unwrap();
-
-                let commit = Object::new_tree(l, hash, &compressed);
-                commit.write().unwrap();
+                let ot: ObjectType = pot.into();
+                let object = Object::from_pack(&ot, &data);
+                object.write().unwrap();
 
                 println!(
-                    "{} tree {uncompressed_length} {} {offset}",
-                    hex::encode(hash),
+                    "{} {} {uncompressed_length} {} {offset}",
+                    object.hash_str(),
+                    ot,
                     compressed_size + 2,
                 );
-                panic!("901908171cb8095fb2acbe6a77770005f4c155ce");
                 &rest[compressed_size..]
-            }
-            PackObjectType::Blob => {
-                panic!("not implemented");
             }
             PackObjectType::OffsetDelta => {
                 panic!("not implemented");
@@ -351,16 +260,17 @@ mod pack {
             PackObjectType::ReferenceDelta => {
                 let base_sha = &rest[..20];
 
-                let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
-                    Ok(obj) => obj,
-                    Err(_e) => {
-                        panic!("cant crate object from hash");
-                    }
-                };
-                let compressed = base_object.compressed;
-                let mut z = ZlibDecoder::new(&compressed[..]);
-                let mut object_data = Vec::new();
-                z.read_to_end(&mut object_data).unwrap();
+                // let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
+                //     Ok(obj) => obj,
+                //     Err(_e) => {
+                //         println!("{}", hex::encode(base_sha));
+                //         panic!("cant crate object from hash");
+                //     }
+                // };
+                // let compressed = base_object.compressed;
+                // let mut z = ZlibDecoder::new(&compressed[..]);
+                // let mut object_data = Vec::new();
+                // z.read_to_end(&mut object_data).unwrap();
 
                 // advance rest pointer
                 rest = &rest[20..];
@@ -372,7 +282,7 @@ mod pack {
                 // source size (variable-length encoded) should match the size of the base object
                 // this probably does not include the header of the binary on disk?
                 let (r, src_size) = parse_var_len(&data).unwrap();
-                assert!(base_object.size == src_size);
+                // assert!(base_object.size == src_size);
 
                 // target size (variable-length encoded) should validate the final object size
                 let (r, target_size) = parse_var_len(r).unwrap();
@@ -645,7 +555,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-        assert_eq!(2, before - new_rest.len());
+        // TODO can be one?
+        // assert_eq!(2, before - new_rest.len());
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
         // println!("object parsed {} bytes", before - new_rest.len());
