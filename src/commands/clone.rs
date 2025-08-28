@@ -224,15 +224,6 @@ mod pack {
         // 6. depth (for deltas): How many delta links from base object
         // 7. base-SHA-1 (for deltas): SHA-1 of the base object
 
-        // TODO seems like we are alwyas off by 2 bytes?
-        //
-        // cae48db0e71c5c66f1eded4ffeded6e6242e32e8 commit 239 162 12
-        // baf2fc1f6696bffae07d12bc681fdbeef25ed978 commit 1164 890 174
-        // 76946a4f274f6d7832828600cdb9971252aa1128 commit 1174 566 1064
-        // 9b36649874280c532f7c06f16b7d7c9aa86073c3 commit 239 161 1630
-        // ...
-        // 48fc09b90b2db56dd7a36e70fc98991086ace882 commit 258 216 3637 1 cb8a2b1e06668f3d9bd35879c41c28f5248ae720
-
         let mut rest = input;
         match object_type {
             PackObjectType::Commit => {
@@ -311,7 +302,41 @@ mod pack {
                 &rest[compressed_size..]
             }
             PackObjectType::Tree => {
-                panic!("not implemented");
+                let mut z = ZlibDecoder::new(rest);
+                let mut data = vec![0u8; uncompressed_length];
+                match z.read_exact(&mut data) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let compressed_size = z.total_in() as usize;
+                        println!("{:?}", e);
+                        println!("trying to read {uncompressed_length} bytes");
+                        println!("read {} bytes", data.len());
+                        println!("{:?}", data);
+                        println!("{compressed_size}");
+                        panic!("");
+                    }
+                }
+
+                let compressed_size = z.total_in() as usize;
+
+                // TODO all the unwraps
+                let buf = Vec::new();
+                let mut writer = GitObjectWriter::new(buf);
+                writer
+                    .write_all(format!("tree {}\0", data.len()).as_bytes())
+                    .unwrap();
+                writer.write_all(&data).unwrap();
+                let (compressed, hash) = writer.finish().unwrap();
+
+                let commit = Object::new_tree(uncompressed_length, hash, &compressed);
+                commit.write().unwrap();
+
+                println!(
+                    "{} tree {uncompressed_length} {} {offset}",
+                    hex::encode(hash),
+                    compressed_size + 2,
+                );
+                &rest[compressed_size..]
             }
             PackObjectType::Blob => {
                 panic!("not implemented");
@@ -323,6 +348,7 @@ mod pack {
                 let base_sha = &rest[..20];
                 rest = &rest[20..];
 
+                println!("{}", hex::encode(base_sha));
                 let base_object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
                 let compressed = base_object.compressed;
                 let mut z = ZlibDecoder::new(&compressed[..]);
