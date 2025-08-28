@@ -236,16 +236,61 @@ mod pack {
         let mut rest = input;
         match object_type {
             PackObjectType::Commit => {
+                let restl = rest.len();
+                // println!("{:08b}", rest[0]);
+                // println!("{:08b}", rest[1]);
                 let mut z = ZlibDecoder::new(rest);
-                let mut data = vec![0u8; uncompressed_length];
-                // TODO here we fail at some point
-                z.read_exact(&mut data).unwrap();
+                // let mut data = vec![0u8; uncompressed_length];
+
+                let mut data = if uncompressed_length == 235 {
+                    println!("{:?}", &rest[..161]);
+                    vec![0u8; 235]
+                } else {
+                    vec![0u8; uncompressed_length]
+                };
+                // let mut data = vec![0u8; uncompressed_length];
+                // // TODO here we fail at some point
+                match z.read_exact(&mut data) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let compressed_size = z.total_in() as usize;
+                        println!("{:?}", e);
+                        println!("trying to read {uncompressed_length} bytes, {restl} remaining");
+                        println!("read {} bytes", data.len());
+                        println!("{:?}", data);
+                        println!("{compressed_size}");
+                        panic!("");
+                    }
+                }
+
+                // let mut data = Vec::new();
+                // let mut chunk = vec![0u8, 1];
+                // println!("{}", chunk.len());
+                // let mut total_read = 0;
+                // while total_read < uncompressed_length {
+                //     match z.read(&mut chunk) {
+                //         Ok(0) => break, // EOF reached
+                //         Ok(n) => {
+                //             data.push(chunk[0]);
+                //             total_read += n;
+                //             // println!("{n} read, {uncompressed_length} expected");
+                //         }
+                //         Err(e) => {
+                //             println!("{:?}", e);
+                //             panic!("");
+                //         }
+                //     }
+                // }
+                //
+                // if total_read != uncompressed_length {
+                //     panic!("");
+                // }
+
                 let compressed_size = z.total_in() as usize;
 
                 // TODO serialize commit using object
                 // TODO do we need to uncompress to hash?
                 // sha = hashed content
-                // TODO do we need to prepend the commit header
                 // TODO all the unwraps
                 let buf = Vec::new();
                 let mut writer = GitObjectWriter::new(buf);
@@ -277,6 +322,7 @@ mod pack {
             PackObjectType::ReferenceDelta => {
                 let base_sha = &rest[..20];
                 rest = &rest[20..];
+
                 let base_object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
                 let compressed = base_object.compressed;
                 let mut z = ZlibDecoder::new(&compressed[..]);
@@ -563,8 +609,10 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        assert_eq!(2, before - new_rest.len());
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
+        println!("object parsed {} bytes", before - new_rest.len());
         offset += before - new_rest.len();
         rest = new_rest;
     }
