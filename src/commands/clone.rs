@@ -137,14 +137,10 @@ mod pack {
     pub(crate) fn parse_object_header(
         input: &[u8],
     ) -> IResult<&[u8], (PackObjectType, usize), Error<&[u8]>> {
-        // Pack Objects
-        // - Variable-length size encoding
-        // - Object type (3 bits) + size info
-        // - Compressed data (individually zlib deflated)
-
         use nom::bits::bits;
         use nom::bits::complete::take as take_bits;
 
+        // TODO combine with parse_var_len
         // error handling a bit cumbersom here
         bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
             let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
@@ -168,8 +164,7 @@ mod pack {
             }
             assert!(cont == 0);
 
-            // TODO panic here?
-            let object_type: PackObjectType = object_type.try_into().unwrap();
+            let object_type: PackObjectType = object_type.try_into().expect("valid object type");
             Ok((rest, (object_type, size)))
         })(input)
     }
@@ -241,6 +236,7 @@ mod pack {
                 };
                 // let mut data = vec![0u8; uncompressed_length];
                 // // TODO here we fail at some point
+                // ZlibDecoder::new(rest).read_to_end(&mut data)?
                 match z.read_exact(&mut data) {
                     Ok(()) => {}
                     Err(e) => {
@@ -319,16 +315,23 @@ mod pack {
 
                 let compressed_size = z.total_in() as usize;
 
-                // TODO all the unwraps
+                // TODO left over data?
+                let l = data.len() - 20;
+                println!("{:?}", &data[l..]);
+                // println!(
+                //     "{:?}",
+                //     std::str::from_utf8(&data[data.len() - 20..]).unwrap()
+                // );
+
                 let buf = Vec::new();
                 let mut writer = GitObjectWriter::new(buf);
                 writer
-                    .write_all(format!("tree {}\0", data.len()).as_bytes())
+                    .write_all(format!("tree {}\0", l).as_bytes())
                     .unwrap();
-                writer.write_all(&data).unwrap();
+                writer.write_all(&data[..l]).unwrap();
                 let (compressed, hash) = writer.finish().unwrap();
 
-                let commit = Object::new_tree(uncompressed_length, hash, &compressed);
+                let commit = Object::new_tree(l, hash, &compressed);
                 commit.write().unwrap();
 
                 println!(
@@ -336,6 +339,7 @@ mod pack {
                     hex::encode(hash),
                     compressed_size + 2,
                 );
+                panic!("901908171cb8095fb2acbe6a77770005f4c155ce");
                 &rest[compressed_size..]
             }
             PackObjectType::Blob => {
@@ -346,14 +350,20 @@ mod pack {
             }
             PackObjectType::ReferenceDelta => {
                 let base_sha = &rest[..20];
-                rest = &rest[20..];
 
-                println!("{}", hex::encode(base_sha));
-                let base_object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
+                let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
+                    Ok(obj) => obj,
+                    Err(_e) => {
+                        panic!("cant crate object from hash");
+                    }
+                };
                 let compressed = base_object.compressed;
                 let mut z = ZlibDecoder::new(&compressed[..]);
                 let mut object_data = Vec::new();
                 z.read_to_end(&mut object_data).unwrap();
+
+                // advance rest pointer
+                rest = &rest[20..];
 
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
@@ -638,7 +648,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         assert_eq!(2, before - new_rest.len());
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
-        println!("object parsed {} bytes", before - new_rest.len());
+        // println!("object parsed {} bytes", before - new_rest.len());
         offset += before - new_rest.len();
         rest = new_rest;
     }
