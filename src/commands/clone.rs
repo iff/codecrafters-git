@@ -276,76 +276,91 @@ mod pack {
             PackObjectType::ReferenceDelta => {
                 let base_sha = &rest[..20];
                 rest = &rest[20..];
+                let object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
+                let compressed = object.compressed;
+                let mut z = ZlibDecoder::new(&compressed[..]);
+                let mut data = Vec::new();
+                z.read_to_end(&mut data).unwrap();
 
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
                 z.read_exact(&mut data).unwrap();
 
-                // TODO can be multiple commands here!
-                // [src_size][target_size][cmd1: add 10 bytes][data1][cmd2: copy from offset 5, len3][cmd3: add 2 bytes][data3]
+                // source size (variable-length encoded) should match the size of the base object
+                // this probably does not include the header of the binary on disk?
+                let (r, src_size) = parse_var_len(&data).unwrap();
 
-                // Delta Format (after decompression)
+                // target size (variable-length encoded) should validate the final object size
+                let (r, target_size) = parse_var_len(r).unwrap();
 
-                // The delta data contains:
-                // 1. Source size (variable-length encoded)
-                let (rest_decompressed, src_size) = parse_var_len(&data).unwrap();
+                // parse delta instructions (copy/insert commands)
+                let mut rest_decompressed = r;
+                while !rest_decompressed.is_empty() {
+                    use nom::bits::bits;
+                    use nom::bits::complete::take as take_bits;
+                    let (r, (command, offset_or_len)) =
+                        bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+                            let (rest, command): (_, u8) = take_bits(1u8)(input)?;
+                            let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
+                            Ok((rest, (command, offset_or_len)))
+                        })(rest_decompressed)
+                        .unwrap();
 
-                // 2. Target size (variable-length encoded)
-                let (rest_decompressed, target_size) = parse_var_len(rest_decompressed).unwrap();
+                    if command == 0 {
+                        // +----------+============+
+                        // | 0xxxxxxx |    data    |
+                        // +----------+============+
+                        let len = offset_or_len as usize;
+                        println!("src = {src_size}, target = {target_size}, len = {len} and total remaining = {}", rest_decompressed.len());
+                        let new_data = &r[..len];
+                        rest_decompressed = &r[len..];
 
-                // 3. Delta instructions (copy/insert commands)
-                use nom::bits::bits;
-                use nom::bits::complete::take as take_bits;
-                let (rest_decompressed, (command, offset_or_len)) =
-                    bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
-                        let (rest, command): (_, u8) = take_bits(1u8)(input)?;
-                        let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
-                        Ok((rest, (command, offset_or_len)))
-                    })(rest_decompressed)
-                    .unwrap();
+                        // TODO!
+                        // data.extend(new_data);
+                    } else if command == 1 {
+                        let offset_bits = offset_or_len;
+                        println!("{:08b}", offset_bits);
+                        // so size can be 3 bytes and offset 4 bytes
+                        // and if we ommit size 1 we assume that size3 encodes bits 16..32 even
+                        // when offset 2 is ommitted.
+                        // +----------+---------+---------+---------+---------+-------+-------+-------+
+                        // | 1xxxxxxx | offset1 | offset2 | offset3 | offset4 | size1 | size2 | size3 |
+                        // +----------+---------+---------+---------+---------+-------+-------+-------+
+                        //  Offset reconstruction (up to 4 bytes):
+                        // - If bit 0 set: read offset byte 0 (least significant)
+                        // - If bit 1 set: read offset byte 1
+                        // - If bit 2 set: read offset byte 2
+                        // - If bit 3 set: read offset byte 3 (most significant)
+                        //
+                        // Size reconstruction (up to 3 bytes):
+                        // - If bit 4 set: read size byte 0 (least significant)
+                        // - If bit 5 set: read size byte 1
+                        // - If bit 6 set: read size byte 2 (most significant)
+                        //
+                        // Example: Command byte 0x91 (10010001)
+                        // - Read 1 offset byte → offset = that byte value
+                        // - Read 1 size byte → size = that byte value
+                        // - Copy size bytes from base object starting at offset
+                        //
+                        // Usage: Once you have the final offset and size values, you copy size bytes from the
+                        // base object starting at position offset into your output buffer.
+                        //
+                        // The copy command essentially says: "Take size bytes from the base object starting at
+                        // offset and append them to the reconstructed object."
+                        panic!("copy command not implemented");
+                    } else {
+                        panic!("unknown command in delta encoding");
+                    };
+                }
 
-                // - Copy command: 1xxxxxxx (bit 7 set)
-                //   - Bits specify offset and size from base object
-                // - Insert command: 0xxxxxxx (bit 7 clear)
-                //   - Following x bytes are literal data to insert
-                let sha = if command == 0 {
-                    // +----------+============+
-                    // | 0xxxxxxx |    data    |
-                    // +----------+============+
-                    let len = offset_or_len as usize;
-                    println!("src = {src_size}, target = {target_size}, len = {len} and total remaining = {}", rest_decompressed.len());
-                    let new_data = &rest_decompressed[..len];
+                let buf = Vec::new();
+                let mut writer = GitObjectWriter::new(buf);
+                writer.write_all(&data).unwrap();
+                let (_compressed, hash) = writer.finish().unwrap();
 
-                    let object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
-                    let compressed = object.compressed;
-                    let mut z = ZlibDecoder::new(&compressed[..]);
-                    let mut data = Vec::new();
-                    z.read_to_end(&mut data).unwrap();
-                    // TODO should be source size
-                    println!(
-                        "original commit len = {} (and compressed = {})",
-                        data.len(),
-                        compressed.len()
-                    );
+                // final object size should be target
 
-                    data.extend(new_data);
-
-                    let buf = Vec::new();
-                    let mut writer = GitObjectWriter::new(buf);
-                    writer.write_all(&data).unwrap();
-                    let (_compressed, hash) = writer.finish().unwrap();
-
-                    // final object size should be target
-
-                    hex::encode(hash)
-                } else if command == 1 {
-                    // +----------+---------+---------+---------+---------+-------+-------+-------+
-                    // | 1xxxxxxx | offset1 | offset2 | offset3 | offset4 | size1 | size2 | size3 |
-                    // +----------+---------+---------+---------+---------+-------+-------+-------+
-                    panic!("not implemented");
-                } else {
-                    panic!("unknown command in delta encoding");
-                };
+                let sha = hex::encode(hash);
 
                 let compressed_size = z.total_in() as usize;
                 println!(
