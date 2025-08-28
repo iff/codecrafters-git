@@ -238,6 +238,7 @@ mod pack {
             PackObjectType::Commit => {
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
+                // TODO here we fail at some point
                 z.read_exact(&mut data).unwrap();
                 let compressed_size = z.total_in() as usize;
 
@@ -276,11 +277,11 @@ mod pack {
             PackObjectType::ReferenceDelta => {
                 let base_sha = &rest[..20];
                 rest = &rest[20..];
-                let object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
-                let compressed = object.compressed;
+                let base_object = Object::from_hash(hex::encode(base_sha).as_str()).unwrap();
+                let compressed = base_object.compressed;
                 let mut z = ZlibDecoder::new(&compressed[..]);
-                let mut data = Vec::new();
-                z.read_to_end(&mut data).unwrap();
+                let mut object_data = Vec::new();
+                z.read_to_end(&mut object_data).unwrap();
 
                 let mut z = ZlibDecoder::new(rest);
                 let mut data = vec![0u8; uncompressed_length];
@@ -289,6 +290,7 @@ mod pack {
                 // source size (variable-length encoded) should match the size of the base object
                 // this probably does not include the header of the binary on disk?
                 let (r, src_size) = parse_var_len(&data).unwrap();
+                assert!(base_object.size == src_size);
 
                 // target size (variable-length encoded) should validate the final object size
                 let (r, target_size) = parse_var_len(r).unwrap();
@@ -311,7 +313,10 @@ mod pack {
                         // | 0xxxxxxx |    data    |
                         // +----------+============+
                         let len = offset_or_len as usize;
-                        println!("src = {src_size}, target = {target_size}, len = {len} and total remaining = {}", rest_decompressed.len());
+                        println!(
+                            "append command: len = {len} and total remaining = {}",
+                            rest_decompressed.len()
+                        );
                         let new_data = &r[..len];
                         rest_decompressed = &r[len..];
 
@@ -319,7 +324,6 @@ mod pack {
                         // data.extend(new_data);
                     } else if command == 1 {
                         let offset_bits = offset_or_len;
-                        println!("{:08b}", offset_bits);
                         // so size can be 3 bytes and offset 4 bytes
                         // and if we ommit size 1 we assume that size3 encodes bits 16..32 even
                         // when offset 2 is ommitted.
@@ -347,7 +351,20 @@ mod pack {
                         //
                         // The copy command essentially says: "Take size bytes from the base object starting at
                         // offset and append them to the reconstructed object."
-                        panic!("copy command not implemented");
+
+                        let num_bytes = offset_bits.count_ones() as usize;
+                        println!(
+                            "copy command: {:08b}, {} bytes to read and total remaining = {}",
+                            offset_bits,
+                            num_bytes,
+                            rest_decompressed.len()
+                        );
+
+                        let new_data = &r[..num_bytes];
+                        // TODO actually get offset and size and copy data
+                        // just continuing for now
+
+                        rest_decompressed = &r[num_bytes..];
                     } else {
                         panic!("unknown command in delta encoding");
                     };
@@ -357,8 +374,10 @@ mod pack {
                 let mut writer = GitObjectWriter::new(buf);
                 writer.write_all(&data).unwrap();
                 let (_compressed, hash) = writer.finish().unwrap();
-
-                // final object size should be target
+                // TODO same type as base?
+                // let final_obj = Object::new_commit(uncompressed_length, hash, &compressed);
+                // final_obj.write().unwrap();
+                // assert!(final_obj.size == target_size);
 
                 let sha = hex::encode(hash);
 
@@ -525,6 +544,10 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // TODO only the simplest case will we directly get the pack file (clone is probably that)
     // https://github.com/git/git/blob/795ea8776befc95ea2becd8020c7a284677b4161/Documentation/gitformat-pack.txt
     let pack = response.bytes()?;
+
+    // trying to debug the response.. it seems to be different then what I get on disk after a new
+    // clone and idx is missing to run git verify-pack
+    // std::fs::write(String::from("sha.pack"), &pack[18..])?;
 
     let (rest, (version, num_objects)) =
         pack::parse_header(&pack).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;

@@ -91,10 +91,10 @@ pub(crate) struct Object {
     #[allow(dead_code)]
     object_type: ObjectType,
     // TODO usize vs u64?
-    size: usize,
+    pub size: usize,
     hash: [u8; 20],
     // TODO refactor later - does not really make sense to be here
-    compressed: Vec<u8>,
+    pub compressed: Vec<u8>,
 }
 
 impl Object {
