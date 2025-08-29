@@ -198,7 +198,8 @@ pub(crate) fn parse_object(
             }
         }
         PackObjectType::OffsetDelta => {
-            panic!("not implemented");
+            // TODO running into this now
+            panic!("OffsetDelta not implemented");
         }
         PackObjectType::ReferenceDelta => {
             let base_sha = &rest[..20];
