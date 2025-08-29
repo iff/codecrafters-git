@@ -48,6 +48,7 @@ impl fmt::Display for ObjectType {
 
 impl From<PackObjectType> for ObjectType {
     fn from(pack_type: PackObjectType) -> Self {
+        // TODO try_from with error for Delta encodings
         match pack_type {
             PackObjectType::Commit => ObjectType::Commit,
             PackObjectType::Tree => ObjectType::Tree,
@@ -119,15 +120,6 @@ pub(crate) struct Object {
 }
 
 impl Object {
-    pub fn new_blob(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
-        Object {
-            object_type: ObjectType::Blob,
-            size,
-            hash,
-            compressed: Vec::from(compressed),
-        }
-    }
-
     pub fn new_tree(size: usize, hash: [u8; 20], compressed: &[u8]) -> Self {
         Object {
             object_type: ObjectType::Tree,
@@ -152,16 +144,16 @@ impl Object {
         let buf = Vec::new();
         let mut writer = GitObjectWriter::new(buf);
         writer
-            .write_all(format!("blob {}\0", size).as_bytes())
+            .write_all(format!("{} {}\0", object_type, size).as_bytes())
             .unwrap();
-        writer.write_all(&data).unwrap();
+        writer.write_all(data).unwrap();
         let (compressed, hash) = writer.finish().unwrap();
 
         Object {
             object_type: object_type.clone(),
             size,
             hash,
-            compressed: Vec::from(compressed),
+            compressed,
         }
     }
 
