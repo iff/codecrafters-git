@@ -214,12 +214,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-        println!("{object_type}, {length}");
-        // TODO can be one?
-        // assert_eq!(2, before - new_rest.len());
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
-        println!("object parsed {} bytes", before - new_rest.len());
         offset += before - new_rest.len();
         rest = new_rest;
     }
