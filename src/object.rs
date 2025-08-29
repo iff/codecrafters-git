@@ -8,6 +8,8 @@ use std::{
 
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 
+use crate::pack::PackObjectType;
+
 pub(crate) fn to_stdout(content: String) -> anyhow::Result<(), anyhow::Error> {
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
@@ -40,6 +42,18 @@ impl fmt::Display for ObjectType {
             ObjectType::Tree => write!(f, "tree"),
             ObjectType::Blob => write!(f, "blob"),
             ObjectType::Tag => write!(f, "tag"),
+        }
+    }
+}
+
+impl From<PackObjectType> for ObjectType {
+    fn from(pack_type: PackObjectType) -> Self {
+        match pack_type {
+            PackObjectType::Commit => ObjectType::Commit,
+            PackObjectType::Tree => ObjectType::Tree,
+            PackObjectType::Blob => ObjectType::Blob,
+            PackObjectType::OffsetDelta => panic!("no offset delta object type"),
+            PackObjectType::ReferenceDelta => panic!("no ref delta object type"),
         }
     }
 }

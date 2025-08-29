@@ -43,18 +43,6 @@ impl TryFrom<u8> for PackObjectType {
     }
 }
 
-impl Into<ObjectType> for PackObjectType {
-    fn into(self) -> ObjectType {
-        match self {
-            PackObjectType::Commit => ObjectType::Commit,
-            PackObjectType::Tree => ObjectType::Tree,
-            PackObjectType::Blob => ObjectType::Blob,
-            PackObjectType::OffsetDelta => panic!("no offset delta object type"),
-            PackObjectType::ReferenceDelta => panic!("no ref delta object type"),
-        }
-    }
-}
-
 fn u32_from_be_bytes(data: &[u8]) -> u32 {
     let data: [u8; 4] = data.try_into().expect("data expected to be 4 bytes");
     u32::from_be_bytes(data)
