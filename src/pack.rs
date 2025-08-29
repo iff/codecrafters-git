@@ -156,25 +156,13 @@ pub(crate) fn parse_object(
     object_type: PackObjectType,
     uncompressed_length: usize,
     input: &[u8],
-    offset: usize,
+    offset: usize, // TODO: remove, only debug output
 ) -> &[u8] {
-    // Output Format
-
-    // SHA-1     type size  size-in-packfile offset-in-packfile [depth base-SHA-1]
-    //
-    // Column Breakdown
-    //
-    // 1. SHA-1: 40-character hex hash of the object
-    // 2. type: Object type (commit, tree, blob, tag)
-    // 3. size: Uncompressed size in bytes
-    // 4. size-in-packfile: Compressed size in the pack file
-    // 5. offset-in-packfile: Byte offset where object starts in pack
-    // 6. depth (for deltas): How many delta links from base object
-    // 7. base-SHA-1 (for deltas): SHA-1 of the base object
-
     let mut rest = input;
     match object_type {
         pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
+            // NOTE: uncompressed_length can be 0 (zero-sized blobs)
+            // this implementation handles this case
             let mut z = ZlibDecoder::new(rest);
             let mut data = vec![0u8; uncompressed_length];
             z.read_exact(&mut data).unwrap();
@@ -184,13 +172,18 @@ pub(crate) fn parse_object(
             let object = Object::from_pack(&ot, &data);
             object.write().unwrap();
 
+            // debug output matching 'git verify-pack --verbose'
             println!(
                 "{} {} {uncompressed_length} {} {offset}",
                 object.hash_str(),
                 ot,
                 object.compressed.len(),
+                // TODO I dont understand how to compute this length? does it include the header?
+                // and what does object.size actually contain? the compressed size without the
+                // header?
                 // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
             );
+
             &rest[compressed_size..]
         }
         PackObjectType::OffsetDelta => {
