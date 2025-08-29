@@ -198,8 +198,63 @@ pub(crate) fn parse_object(
             }
         }
         PackObjectType::OffsetDelta => {
-            // TODO running into this now
-            panic!("OffsetDelta not implemented");
+            // TODO maybe need i32 here? not usize?
+            // length seems to be off?
+            let (rest, offset) = parse_var_len(rest).unwrap();
+            println!("offset delta, offset = {offset}");
+
+            let mut z = ZlibDecoder::new(rest);
+            let mut data = vec![0u8; uncompressed_length];
+            z.read_exact(&mut data).unwrap();
+
+            // TODO merge with RefDelta
+            // parse delta instructions (copy/insert commands)
+            let mut rest_decompressed = rest;
+            while !rest_decompressed.is_empty() {
+                use nom::bits::bits;
+                use nom::bits::complete::take as take_bits;
+                let (r, (command, offset_or_len)) =
+                    bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+                        let (rest, command): (_, u8) = take_bits(1u8)(input)?;
+                        let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
+                        Ok((rest, (command, offset_or_len)))
+                    })(rest_decompressed)
+                    .unwrap();
+
+                if command == 0 {
+                    let len = offset_or_len as usize;
+                    println!(
+                        "append command: len = {len} and total remaining = {}",
+                        rest_decompressed.len()
+                    );
+                    let _new_data = &r[..len];
+                    rest_decompressed = &r[len..];
+
+                    // TODO actually insert data
+                    // data.extend(new_data);
+                } else if command == 1 {
+                    let offset_bits = offset_or_len;
+
+                    let num_bytes = offset_bits.count_ones() as usize;
+                    println!(
+                        "copy command: {:08b}, {} bytes to read and total remaining = {}",
+                        offset_bits,
+                        num_bytes,
+                        rest_decompressed.len()
+                    );
+
+                    let new_data = &r[..num_bytes];
+                    // TODO actually get offset and size and copy data
+                    // just continuing for now
+
+                    rest_decompressed = &r[num_bytes..];
+                } else {
+                    panic!("unknown command in delta encoding");
+                };
+            }
+
+            let compressed_size = z.total_in() as usize;
+            &rest[compressed_size..]
         }
         PackObjectType::ReferenceDelta => {
             let base_sha = &rest[..20];
@@ -219,7 +274,6 @@ pub(crate) fn parse_object(
             // advance rest pointer
             rest = &rest[20..];
 
-            println!("{}", hex::encode(base_sha));
             let mut z = ZlibDecoder::new(rest);
             let mut data = vec![0u8; uncompressed_length];
             z.read_exact(&mut data).unwrap();
