@@ -197,9 +197,11 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // trying to debug the response.. it seems to be different then what I get on disk after a new
     // clone and idx is missing to run git verify-pack
     // std::fs::write(String::from("sha.pack"), &pack[18..])?;
+    let (rest, _) = pack::parse_network_header(&pack)
+        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     let (rest, (version, num_objects)) =
-        pack::parse_header(&pack).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        pack::parse_header(rest).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     // TODO for now?
     assert!(version == 2);
@@ -212,11 +214,12 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        println!("{object_type}, {length}");
         // TODO can be one?
         // assert_eq!(2, before - new_rest.len());
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
-        // println!("object parsed {} bytes", before - new_rest.len());
+        println!("object parsed {} bytes", before - new_rest.len());
         offset += before - new_rest.len();
         rest = new_rest;
     }

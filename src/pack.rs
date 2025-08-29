@@ -65,7 +65,9 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
     take(len - 4)(rest)
 }
 
-pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u8]>> {
+pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
+    // TODO this is different when reading pack file from disk and what we get with http post
+    // (cloning)?
     let (rest, pack_file) = read_pkt_line(input)?;
     assert!(pack_file == "packfile\n".as_bytes());
 
@@ -74,7 +76,11 @@ pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u
     let (rest, _unclear) = take(5u8)(rest)?;
     // println!("{:?}", unclear);
 
-    let (rest, pack) = take(4u8)(rest)?;
+    Ok((rest, ()))
+}
+
+pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u8]>> {
+    let (rest, pack) = take(4u8)(input)?;
     assert!(pack == "PACK".as_bytes());
 
     let (rest, version) = take(4u8)(rest)?;
@@ -94,7 +100,6 @@ pub(crate) fn parse_object_header(
 
     // TODO combine with parse_var_len
     // error handling a bit cumbersom here
-    println!("{:08b}", &input[0]);
     bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
         let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
         let (rest, object_type): (_, u8) = take_bits(3u8)(rest)?;
@@ -104,14 +109,12 @@ pub(crate) fn parse_object_header(
         let mut shift = 4;
         let mut cont = cont;
         let mut rest = rest;
-        // cont == 0 marks the end
         while cont == 1 {
             let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
             cont = new_cont;
             let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
             rest = new_rest;
 
-            // TODO update size
             size |= (size_bits as usize) << shift;
             shift += 7;
         }
@@ -135,14 +138,12 @@ pub(crate) fn parse_var_len(input: &[u8]) -> IResult<&[u8], usize, Error<&[u8]>>
         let mut shift = 7;
         let mut cont = cont;
         let mut rest = rest;
-        // cont == 0 marks the end
         while cont == 1 {
             let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
             cont = new_cont;
             let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
             rest = new_rest;
 
-            // TODO update size
             size |= (size_bits as usize) << shift;
             shift += 7;
         }
@@ -192,17 +193,17 @@ pub(crate) fn parse_object(
         PackObjectType::ReferenceDelta => {
             let base_sha = &rest[..20];
 
-            // let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
-            //     Ok(obj) => obj,
-            //     Err(_e) => {
-            //         println!("{}", hex::encode(base_sha));
-            //         panic!("cant crate object from hash");
-            //     }
-            // };
-            // let compressed = base_object.compressed;
-            // let mut z = ZlibDecoder::new(&compressed[..]);
-            // let mut object_data = Vec::new();
-            // z.read_to_end(&mut object_data).unwrap();
+            let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
+                Ok(obj) => obj,
+                Err(_e) => {
+                    println!("{}", hex::encode(base_sha));
+                    panic!("cant crate object from hash. hash does not exist?");
+                }
+            };
+            let compressed = base_object.compressed;
+            let mut z = ZlibDecoder::new(&compressed[..]);
+            let mut object_data = Vec::new();
+            z.read_to_end(&mut object_data).unwrap();
 
             // advance rest pointer
             rest = &rest[20..];
@@ -215,7 +216,7 @@ pub(crate) fn parse_object(
             // source size (variable-length encoded) should match the size of the base object
             // this probably does not include the header of the binary on disk?
             let (r, src_size) = parse_var_len(&data).unwrap();
-            // assert!(base_object.size == src_size);
+            assert!(base_object.size == src_size);
 
             // target size (variable-length encoded) should validate the final object size
             let (r, target_size) = parse_var_len(r).unwrap();
@@ -242,10 +243,10 @@ pub(crate) fn parse_object(
                         "append command: len = {len} and total remaining = {}",
                         rest_decompressed.len()
                     );
-                    let new_data = &r[..len];
+                    let _new_data = &r[..len];
                     rest_decompressed = &r[len..];
 
-                    // TODO!
+                    // TODO actually insert data
                     // data.extend(new_data);
                 } else if command == 1 {
                     let offset_bits = offset_or_len;
