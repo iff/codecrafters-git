@@ -1,6 +1,9 @@
-use std::{fmt::Display, io::Write};
+use std::{
+    fmt::Display,
+    io::{BufReader, Write},
+};
 
-use flate2::bufread::ZlibDecoder;
+use flate2::read::ZlibDecoder;
 use nom::{bytes::complete::take, error::Error, IResult};
 use std::io::Read;
 
@@ -185,7 +188,14 @@ pub(crate) fn parse_object(
                 // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
             );
 
-            &rest[compressed_size..]
+            if compressed_size == 0 {
+                // TODO why? just tested with trial and error? always the same?
+                // empty data gets the zlib header (2 bytes) + compressed empty block (1 byte) +
+                // Adler-32 checksum (4 bytes) + potential padding = ~8 bytes total?
+                &rest[compressed_size + 8..]
+            } else {
+                &rest[compressed_size..]
+            }
         }
         PackObjectType::OffsetDelta => {
             panic!("not implemented");
