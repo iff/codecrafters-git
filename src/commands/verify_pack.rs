@@ -19,7 +19,9 @@ pub(crate) fn invoke(pack_file: &str) -> anyhow::Result<()> {
     let mut rest = rest;
     for _ in 0..num_objects {
         let before = rest.len();
-        let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
+        // let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
+        //     .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        let (new_rest, (object_type, length)) = pack::pack_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
