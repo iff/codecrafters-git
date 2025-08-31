@@ -219,6 +219,7 @@ fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], 
             // +----------+============+
             // | 0xxxxxxx |    data    |
             // +----------+============+
+
             let len = offset_or_len as usize;
             println!(
                 "append command: len = {len} and total remaining = {}",
@@ -233,50 +234,59 @@ fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], 
 
             rest_decompressed = r;
         } else if command == 1 {
-            // so size can be 3 bytes and offset 4 bytes
-            // and if we ommit size 1 we assume that size3 encodes bits 16..32 even
-            // when offset 2 is ommitted.
             // +----------+---------+---------+---------+---------+-------+-------+-------+
             // | 1xxxxxxx | offset1 | offset2 | offset3 | offset4 | size1 | size2 | size3 |
             // +----------+---------+---------+---------+---------+-------+-------+-------+
-            //  Offset reconstruction (up to 4 bytes):
-            // - If bit 0 set: read offset byte 0 (least significant)
-            // - If bit 1 set: read offset byte 1
-            // - If bit 2 set: read offset byte 2
-            // - If bit 3 set: read offset byte 3 (most significant)
             //
-            // Size reconstruction (up to 3 bytes):
-            // - If bit 4 set: read size byte 0 (least significant)
-            // - If bit 5 set: read size byte 1
-            // - If bit 6 set: read size byte 2 (most significant)
-            //
-            // Example: Command byte 0x91 (10010001)
-            // - Read 1 offset byte → offset = that byte value
-            // - Read 1 size byte → size = that byte value
-            // - Copy size bytes from base object starting at offset
-            //
-            // Usage: Once you have the final offset and size values, you copy size bytes from the
-            // base object starting at position offset into your output buffer.
+            // with the final offset and size values, copy size bytes from the
+            // base object starting at position offset into your output buffer
             //
             // The copy command essentially says: "Take size bytes from the base object starting at
             // offset and append them to the reconstructed object."
 
             let offset_bits = offset_or_len;
 
-            // TODO this might be off
-            let num_bytes = offset_bits.count_ones() as usize;
+            let mut offset: u64 = 0;
+            let mut size: u64 = 0;
+            let mut shift = 0;
+
+            let mut r = r;
+            for i in 0..4 {
+                if (offset_bits & (1 << i)) != 0 {
+                    let (new_rest, b) = nom::bytes::complete::take(1usize)(r)?;
+                    offset |= (*b.first().unwrap() as u64) << shift;
+                    r = new_rest;
+                }
+                // always shift even if this bit is not set
+                shift += 8;
+            }
+
+            shift = 0;
+            for i in 4..7 {
+                if (offset_bits & (1 << i)) != 0 {
+                    let (new_rest, b) = nom::bytes::complete::take(1usize)(r)?;
+                    size |= (*b.first().unwrap() as u64) << shift;
+                    r = new_rest;
+                }
+                // TODO same here? always shift even if this bit is not set
+                shift += 8;
+            }
+
+            // default size if none of the size flags were set.
+            if size == 0 {
+                size = 0x10000;
+            }
+
             println!(
-                "copy command: {:08b}, {} bytes to read and total remaining = {}",
+                "copy command: {:08b}: {size} bytes to read at {offset} and total remaining = {}",
                 offset_bits,
-                num_bytes,
                 r.len()
             );
 
-            let new_data = &r[..num_bytes];
-            // TODO actually get offset and size and copy data
+            // TODO actually copy offset and size data
             // just continuing for now
 
-            rest_decompressed = &r[num_bytes..];
+            rest_decompressed = r;
         } else {
             panic!("unknown command in delta encoding");
         };
