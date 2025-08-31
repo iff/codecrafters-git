@@ -122,6 +122,41 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
     )))
 }
 
+fn parse_ofs_delta_offset(start_of_obj: usize, input: &[u8]) -> IResult<&[u8], usize> {
+    // offset encoding:
+    // n bytes with MSB set in all but the last one.
+    // The offset is then the number constructed by
+    // concatenating the lower 7 bit of each byte, and
+    // for n >= 2 adding 2^7 + 2^14 + ... + 2^(7*(n-1))
+    // to the result.
+    let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
+
+    // The first payload contributes the high‑order bits *without* a left‑shift.
+    // (Git’s spec says the first byte’s 7 bits are the most‑significant part.)
+    let mut offset: usize = first_payload as usize;
+    let mut cont = first_cont;
+
+    while cont {
+        let (new_rest, (payload, more)) = git_varint_byte(rest)?;
+        offset = (offset << 7) | (payload as usize);
+        rest = new_rest;
+        cont = more;
+    }
+
+    // ---- 3️⃣  Convert to a backward distance -----------------------------
+    // The stored value is the *distance* from the start of the current
+    // object to the start of the base object, *excluding* the current
+    // object's header itself. Therefore:
+    let distance = start_of_obj.checked_sub(offset).ok_or_else(|| {
+        nom::Err::Failure(nom::error::Error::new(
+            rest,
+            nom::error::ErrorKind::TooLarge,
+        ))
+    })?;
+
+    Ok((rest, distance))
+}
+
 pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
     // TODO this is different when reading pack file from disk and what we get with http post
     // (cloning)?
@@ -175,20 +210,10 @@ pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)
     Ok((rest, (obj_type, size)))
 }
 
-fn handle_delta(input: &[u8], base_object: &Object) {
+fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], ()> {
     let mut rest_decompressed = input;
     while !rest_decompressed.is_empty() {
-        // use nom::bits::bits;
-        // use nom::bits::complete::take as take_bits;
-        // let (r, (command, offset_or_len)) =
-        //     bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
-        //         let (rest, command): (_, u8) = take_bits(1u8)(input)?;
-        //         let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
-        //         Ok((rest, (command, offset_or_len)))
-        //     })(rest_decompressed)
-        //     .unwrap();
-
-        let (r, (offset_or_len, command)) = git_delta_command(rest_decompressed).unwrap();
+        let (r, (offset_or_len, command)) = git_delta_command(rest_decompressed)?;
 
         if command == 0 {
             // +----------+============+
@@ -197,13 +222,16 @@ fn handle_delta(input: &[u8], base_object: &Object) {
             let len = offset_or_len as usize;
             println!(
                 "append command: len = {len} and total remaining = {}",
-                rest_decompressed.len()
+                r.len()
             );
-            let _new_data = &r[..len];
-            rest_decompressed = &r[len..];
+            let (r, new_data) = take(len)(r)?;
+            // let _new_data = &r[..len];
+            // rest_decompressed = &r[len..];
 
             // TODO actually insert data
             // data.extend(new_data);
+
+            rest_decompressed = r;
         } else if command == 1 {
             // so size can be 3 bytes and offset 4 bytes
             // and if we ommit size 1 we assume that size3 encodes bits 16..32 even
@@ -241,7 +269,7 @@ fn handle_delta(input: &[u8], base_object: &Object) {
                 "copy command: {:08b}, {} bytes to read and total remaining = {}",
                 offset_bits,
                 num_bytes,
-                rest_decompressed.len()
+                r.len()
             );
 
             let new_data = &r[..num_bytes];
@@ -253,6 +281,8 @@ fn handle_delta(input: &[u8], base_object: &Object) {
             panic!("unknown command in delta encoding");
         };
     }
+
+    Ok((rest_decompressed, ()))
 }
 
 pub(crate) fn parse_object(
@@ -261,6 +291,8 @@ pub(crate) fn parse_object(
     input: &[u8],
     offset: usize, // TODO: remove, only debug output
 ) -> &[u8] {
+    // TODO
+    // let payload_start_idx = offset + (buf.len() - rest.len());
     let mut rest = input;
     match object_type {
         pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
@@ -297,10 +329,7 @@ pub(crate) fn parse_object(
             }
         }
         PackObjectType::OffsetDelta => {
-            // TODO maybe need i32 here? not usize?
-            // length seems to be off?
-            let (rest, base_obj_offset) = git_varint(rest).unwrap();
-            // TODO why is the offset larger than offset?
+            let (rest, base_obj_offset) = parse_ofs_delta_offset(offset, rest).unwrap();
             println!("offset delta, base object offset = {base_obj_offset}");
 
             // TODO get base object from offset
