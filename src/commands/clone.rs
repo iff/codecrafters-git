@@ -200,23 +200,19 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let (rest, _) = pack::parse_network_header(&pack)
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
+    let mut offset = rest.len();
     let (rest, (version, num_objects)) =
         pack::parse_header(rest).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-
-    // TODO for now?
     assert!(version == 2);
-    println!("pack: {} objects recieved", num_objects);
+    offset -= rest.len();
 
     let mut rest = rest;
-    // just to mimic the output of git verify-pack as debug help
-    let mut offset = 12;
     for _ in 0..num_objects {
-        let before = rest.len();
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
-        offset += before - new_rest.len();
+        offset += rest.len() - new_rest.len();
         rest = new_rest;
     }
 
