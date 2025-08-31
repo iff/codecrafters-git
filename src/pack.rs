@@ -68,6 +68,17 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
 
 /// Decode a single Git pack varint byte.
 /// Returns (value_of_this_byte, continuation_flag).
+fn git_delta_command(input: &[u8]) -> IResult<&[u8], (u8, u8)> {
+    let (rest, b) = u8(input)?;
+    // MSB = command
+    let command = b >> 7;
+    // lower 7 bits hold offset bits or length
+    let offset_or_length = b & 0x7F;
+    Ok((rest, (offset_or_length, command)))
+}
+
+/// Decode a single Git pack varint byte.
+/// Returns (value_of_this_byte, continuation_flag).
 fn git_varint_byte(input: &[u8]) -> IResult<&[u8], (u8, bool)> {
     // Grab one raw byte
     let (rest, b) = u8(input)?;
@@ -111,32 +122,6 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
     )))
 }
 
-/// Parse the *entire* pack‑object header (type + full size) and return the
-/// remaining slice together with the extracted information.
-pub fn pack_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
-    let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
-
-    // Bits 6‑4 of the original byte are the object type.
-    let type_bits = (first_payload >> 4) & 0b111;
-    let obj_type: PackObjectType = type_bits.try_into().expect("valid object type");
-
-    // Bits 3‑0 are the low three size bits.
-    let mut size: u64 = (first_payload & 0b1111) as u64;
-    let mut shift = 4;
-
-    // TODO should check that we only parse 4 additional bytes
-    let mut cont = first_cont;
-    while cont {
-        let (new_rest, (payload, more)) = git_varint_byte(rest)?;
-        size |= (payload as u64) << shift;
-        shift += 7;
-        rest = new_rest;
-        cont = more;
-    }
-
-    Ok((rest, (obj_type, size)))
-}
-
 pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
     // TODO this is different when reading pack file from disk and what we get with http post
     // (cloning)?
@@ -164,81 +149,46 @@ pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u
     Ok((rest, (version, num_objects)))
 }
 
-pub(crate) fn parse_object_header(
-    input: &[u8],
-) -> IResult<&[u8], (PackObjectType, usize), Error<&[u8]>> {
-    use nom::bits::bits;
-    use nom::bits::complete::take as take_bits;
+/// Parse the *entire* pack‑object header (type + full size) and return the
+/// remaining slice together with the extracted information.
+pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
+    let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
 
-    // TODO combine with parse_var_len
-    // error handling a bit cumbersom here
-    bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
-        let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
-        let (rest, object_type): (_, u8) = take_bits(3u8)(rest)?;
-        let (rest, size): (_, u8) = take_bits(4u8)(rest)?;
-        let mut size = size as usize;
+    // Bits 6‑4 of the original byte are the object type.
+    let type_bits = (first_payload >> 4) & 0b111;
+    let obj_type: PackObjectType = type_bits.try_into().expect("valid object type");
 
-        let mut shift = 4;
-        let mut cont = cont;
-        let mut rest = rest;
-        while cont == 1 {
-            let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
-            cont = new_cont;
-            let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
-            rest = new_rest;
+    // Bits 3‑0 are the low three size bits.
+    let mut size: u64 = (first_payload & 0b1111) as u64;
+    let mut shift = 4;
 
-            size |= (size_bits as usize) << shift;
-            shift += 7;
-        }
-        assert!(cont == 0);
+    // TODO should check that we only parse 4 additional bytes
+    let mut cont = first_cont;
+    while cont {
+        let (new_rest, (payload, more)) = git_varint_byte(rest)?;
+        size |= (payload as u64) << shift;
+        shift += 7;
+        rest = new_rest;
+        cont = more;
+    }
 
-        let object_type: PackObjectType = object_type.try_into().expect("valid object type");
-        Ok((rest, (object_type, size)))
-    })(input)
-}
-
-pub(crate) fn parse_var_len(input: &[u8]) -> IResult<&[u8], usize, Error<&[u8]>> {
-    use nom::bits::bits;
-    use nom::bits::complete::take as take_bits;
-
-    // error handling a bit cumbersom here
-    bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
-        let (rest, cont): (_, u8) = take_bits(1u8)(input)?;
-        let (rest, size): (_, u8) = take_bits(7u8)(rest)?;
-        let mut size = size as usize;
-
-        println!("{:8b}", size);
-        let mut shift = 7;
-        let mut cont = cont;
-        let mut rest = rest;
-        while cont == 1 {
-            let (new_rest, new_cont): (_, u8) = take_bits(1u8)(rest)?;
-            cont = new_cont;
-            let (new_rest, size_bits): (_, u8) = take_bits(7u8)(new_rest)?;
-            rest = new_rest;
-
-            size |= (size_bits as usize) << shift;
-            println!("{:8b}", size);
-            shift += 7;
-        }
-        assert!(cont == 0);
-
-        Ok((rest, size))
-    })(input)
+    Ok((rest, (obj_type, size)))
 }
 
 fn handle_delta(input: &[u8], base_object: &Object) {
     let mut rest_decompressed = input;
     while !rest_decompressed.is_empty() {
-        use nom::bits::bits;
-        use nom::bits::complete::take as take_bits;
-        let (r, (command, offset_or_len)) =
-            bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
-                let (rest, command): (_, u8) = take_bits(1u8)(input)?;
-                let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
-                Ok((rest, (command, offset_or_len)))
-            })(rest_decompressed)
-            .unwrap();
+        // use nom::bits::bits;
+        // use nom::bits::complete::take as take_bits;
+        // let (r, (command, offset_or_len)) =
+        //     bits::<_, _, Error<(&[u8], usize)>, Error<&[u8]>, _>(|input| {
+        //         let (rest, command): (_, u8) = take_bits(1u8)(input)?;
+        //         let (rest, offset_or_len): (_, u8) = take_bits(7u8)(rest)?;
+        //         Ok((rest, (command, offset_or_len)))
+        //     })(rest_decompressed)
+        //     .unwrap();
+
+        let (r, (offset_or_len, command)) = git_delta_command(rest_decompressed).unwrap();
 
         if command == 0 {
             // +----------+============+
@@ -360,7 +310,7 @@ pub(crate) fn parse_object(
             // offset can point to another delta, so we need to go back recusivelyuntil we find a
             // concret object
             let base_object =
-                Object::from_hash("3fa53a0a021424a8c309f118f44743654dd7a8cb").unwrap();
+                Object::from_hash("23f0bc3b5c7c3108e41c448f01a3db31e7064bbb").unwrap();
 
             let mut z = ZlibDecoder::new(rest);
             let mut data = vec![0u8; uncompressed_length as usize];
@@ -399,11 +349,11 @@ pub(crate) fn parse_object(
 
             // source size (variable-length encoded) should match the size of the base object
             // this probably does not include the header of the binary on disk?
-            let (r, src_size) = parse_var_len(&data).unwrap();
-            assert!(base_object.size == src_size);
+            let (r, src_size) = git_varint(&data).unwrap();
+            assert!(base_object.size as u64 == src_size);
 
             // target size (variable-length encoded) should validate the final object size
-            let (r, target_size) = parse_var_len(r).unwrap();
+            let (r, target_size) = git_varint(r).unwrap();
 
             // parse delta instructions (copy/insert commands)
             handle_delta(r, &base_object);
@@ -492,7 +442,7 @@ mod tests {
         //  - low size = 010 (2)
         // Next size byte: 0b0000_0001 (cont=0, payload=1) → adds 1<<3 = 8
         let data = [0b1100_0010, 0b0000_0001];
-        let (_, (typ, sz)) = pack_object_header(&data).unwrap();
+        let (_, (typ, sz)) = parse_object_header(&data).unwrap();
         assert_eq!(typ, PackObjectType::Commit);
         assert_eq!(sz, 10); // 2 (low) + 8 (extra) = 10
     }
@@ -504,7 +454,7 @@ mod tests {
         //  - low size = 111 (7)
         //  - cont = 0 (no extra bytes)
         let data = [0b1000_0111];
-        let (_, (typ, sz)) = pack_object_header(&data).unwrap();
+        let (_, (typ, sz)) = parse_object_header(&data).unwrap();
         assert_eq!(typ, PackObjectType::Blob);
         assert_eq!(sz, 7);
     }
@@ -518,7 +468,7 @@ mod tests {
         // Next bytes: 0b1000_0011 (cont=1, payload=3) → adds 3 << 3 = 24
         //             0b0000_0100 (cont=0, payload=4) → adds 4 << 10 = 4096
         let data = [0b1011_0010, 0b1000_0011, 0b0000_0100];
-        let (_, (typ, sz)) = pack_object_header(&data).unwrap();
+        let (_, (typ, sz)) = parse_object_header(&data).unwrap();
         assert_eq!(typ, PackObjectType::OffsetDelta);
         // size = 2 + (3 << 3) + (4 << 10) = 2 + 24 + 4096 = 4122
         assert_eq!(sz, 4122);

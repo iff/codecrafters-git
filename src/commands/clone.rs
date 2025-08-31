@@ -212,9 +212,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let mut offset = 12;
     for _ in 0..num_objects {
         let before = rest.len();
-        // let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
-        //     .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-        let (new_rest, (object_type, length)) = pack::pack_object_header(rest)
+        let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
         let new_rest = pack::parse_object(object_type, length, new_rest, offset);
