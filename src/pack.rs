@@ -210,30 +210,33 @@ pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)
     Ok((rest, (obj_type, size)))
 }
 
-fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], ()> {
+fn handle_delta<'a>(
+    input: &'a [u8],
+    target_size: u64,
+    base_object: &Object,
+) -> IResult<&'a [u8], ()> {
     let mut rest_decompressed = input;
     while !rest_decompressed.is_empty() {
         let (r, (offset_or_len, command)) = git_delta_command(rest_decompressed)?;
 
         if command == 0 {
+            // insert command
             // +----------+============+
             // | 0xxxxxxx |    data    |
             // +----------+============+
 
             let len = offset_or_len as usize;
             println!(
-                "append command: len = {len} and total remaining = {}",
+                "append: {len} bytes to read and total remaining = {}",
                 r.len()
             );
             let (r, new_data) = take(len)(r)?;
-            // let _new_data = &r[..len];
-            // rest_decompressed = &r[len..];
 
             // TODO actually insert data
-            // data.extend(new_data);
 
             rest_decompressed = r;
         } else if command == 1 {
+            // copy command
             // +----------+---------+---------+---------+---------+-------+-------+-------+
             // | 1xxxxxxx | offset1 | offset2 | offset3 | offset4 | size1 | size2 | size3 |
             // +----------+---------+---------+---------+---------+-------+-------+-------+
@@ -268,7 +271,7 @@ fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], 
                     size |= (*b.first().unwrap() as u64) << shift;
                     r = new_rest;
                 }
-                // TODO same here? always shift even if this bit is not set
+                // always shift even if this bit is not set
                 shift += 8;
             }
 
@@ -277,9 +280,10 @@ fn handle_delta<'a>(input: &'a [u8], base_object: &Object) -> IResult<&'a [u8], 
                 size = 0x10000;
             }
 
+            let bytes_consumed = offset_bits.count_ones() as u64;
+
             println!(
-                "copy command: {:08b}: {size} bytes to read at {offset} and total remaining = {}",
-                offset_bits,
+                "copy  : {bytes_consumed} bytes to read and total remaining = {}. offset = {offset}",
                 r.len()
             );
 
@@ -355,9 +359,16 @@ pub(crate) fn parse_object(
             let mut data = vec![0u8; uncompressed_length as usize];
             z.read_exact(&mut data).unwrap();
 
+            // source size (variable-length encoded) should match the size of the base object
+            // this probably does not include the header of the binary on disk?
+            let (r, src_size) = git_varint(&data).unwrap();
+
+            // target size (variable-length encoded) should validate the final object size
+            let (r, target_size) = git_varint(r).unwrap();
+
             // TODO merge with RefDelta
             // parse delta instructions (copy/insert commands)
-            handle_delta(rest, &base_object);
+            handle_delta(r, target_size, &base_object).unwrap();
 
             // TODO objects?
 
@@ -395,7 +406,7 @@ pub(crate) fn parse_object(
             let (r, target_size) = git_varint(r).unwrap();
 
             // parse delta instructions (copy/insert commands)
-            handle_delta(r, &base_object);
+            handle_delta(r, target_size, &base_object).unwrap();
 
             let buf = Vec::new();
             let mut writer = GitObjectWriter::new(buf);
