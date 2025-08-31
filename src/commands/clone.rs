@@ -201,6 +201,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     let mut offset = rest.len();
+    let data = &rest;
     let (rest, (version, num_objects)) =
         pack::parse_header(rest).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
     assert!(version == 2);
@@ -211,7 +212,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
             .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
-        let new_rest = pack::parse_object(object_type, length, new_rest, offset);
+        let new_rest = pack::parse_object(data, object_type, length, new_rest, offset);
         offset += rest.len() - new_rest.len();
         rest = new_rest;
     }

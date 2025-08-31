@@ -210,11 +210,13 @@ pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)
     Ok((rest, (obj_type, size)))
 }
 
-fn handle_delta<'a>(
-    input: &'a [u8],
-    target_size: u64,
-    base_object: &Object,
-) -> IResult<&'a [u8], ()> {
+pub enum PackDelta {
+    Insert(Vec<u8>),
+    Copy { offset: u64, size: u64 },
+}
+
+fn handle_delta<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<PackDelta>> {
+    let mut deltas: Vec<PackDelta> = Vec::new();
     let mut rest_decompressed = input;
     while !rest_decompressed.is_empty() {
         let (r, (offset_or_len, command)) = git_delta_command(rest_decompressed)?;
@@ -232,7 +234,7 @@ fn handle_delta<'a>(
             );
             let (r, new_data) = take(len)(r)?;
 
-            // TODO actually insert data
+            deltas.push(PackDelta::Insert(new_data.to_owned()));
 
             rest_decompressed = r;
         } else if command == 1 {
@@ -287,8 +289,7 @@ fn handle_delta<'a>(
                 r.len()
             );
 
-            // TODO actually copy offset and size data
-            // just continuing for now
+            deltas.push(PackDelta::Copy { offset, size });
 
             rest_decompressed = r;
         } else {
@@ -296,17 +297,18 @@ fn handle_delta<'a>(
         };
     }
 
-    Ok((rest_decompressed, ()))
+    Ok((rest_decompressed, deltas))
 }
 
-pub(crate) fn parse_object(
+pub(crate) fn parse_object<'a>(
+    data: &'a [u8],
     object_type: PackObjectType,
     uncompressed_length: u64,
-    input: &[u8],
-    offset: usize, // TODO: remove, only debug output
-) -> &[u8] {
-    // TODO
-    // let payload_start_idx = offset + (buf.len() - rest.len());
+    input: &'a [u8],
+    offset: usize,
+) -> &'a [u8] {
+    let start_idx = offset; // we dont update the offset after parsing the header
+
     let mut rest = input;
     match object_type {
         pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
@@ -343,17 +345,11 @@ pub(crate) fn parse_object(
             }
         }
         PackObjectType::OffsetDelta => {
-            let (rest, base_obj_offset) = parse_ofs_delta_offset(offset, rest).unwrap();
-            println!("offset delta, base object offset = {base_obj_offset}");
+            // TODO combine with RefDelta.. just different header parsing
 
-            // TODO get base object from offset
-            // offset is measured from start of header of offset delta, so we need to know how many
-            // bytes that was to go back
-            // so maybe a cursor is bettes suited
-            // offset can point to another delta, so we need to go back recusivelyuntil we find a
-            // concret object
-            let base_object =
-                Object::from_hash("23f0bc3b5c7c3108e41c448f01a3db31e7064bbb").unwrap();
+            let (rest, base_obj_offset) = parse_ofs_delta_offset(offset, rest).unwrap();
+            // TODO here we need access to the full data stream to decide what we append
+            let base = &data[start_idx - base_obj_offset..];
 
             let mut z = ZlibDecoder::new(rest);
             let mut data = vec![0u8; uncompressed_length as usize];
@@ -366,16 +362,24 @@ pub(crate) fn parse_object(
             // target size (variable-length encoded) should validate the final object size
             let (r, target_size) = git_varint(r).unwrap();
 
-            // TODO merge with RefDelta
-            // parse delta instructions (copy/insert commands)
-            handle_delta(r, target_size, &base_object).unwrap();
-
-            // TODO objects?
+            let (_, deltas) = handle_delta(r).unwrap();
+            let ot: ObjectType = object_type.into();
+            let object = Object::from_pack_deltas(base, &deltas, &ot);
+            object.write().unwrap();
 
             let compressed_size = z.total_in() as usize;
+            println!(
+                "{} {} {uncompressed_length} {} {offset}",
+                object.hash_str(),
+                ot,
+                compressed_size + 20 + 2,
+            );
             &rest[compressed_size..]
         }
         PackObjectType::ReferenceDelta => {
+            // TODO correct version handling
+            // 2 | 3 => 20 bytes SHA‑1
+            // 4     => 32 bytes SHA‑256 (v4 packs)
             let base_sha = &rest[..20];
 
             let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
@@ -385,10 +389,10 @@ pub(crate) fn parse_object(
                     panic!("cant crate object from hash. hash does not exist?");
                 }
             };
-            // let compressed = base_object.compressed;
-            // let mut z = ZlibDecoder::new(&compressed[..]);
-            // let mut object_data = Vec::new();
-            // z.read_to_end(&mut object_data).unwrap();
+            let compressed = base_object.compressed;
+            let mut z = ZlibDecoder::new(&compressed[..]);
+            let mut object_data = Vec::new();
+            z.read_to_end(&mut object_data).unwrap();
 
             // advance rest pointer
             rest = &rest[20..];
@@ -405,23 +409,17 @@ pub(crate) fn parse_object(
             // target size (variable-length encoded) should validate the final object size
             let (r, target_size) = git_varint(r).unwrap();
 
-            // parse delta instructions (copy/insert commands)
-            handle_delta(r, target_size, &base_object).unwrap();
-
-            let buf = Vec::new();
-            let mut writer = GitObjectWriter::new(buf);
-            writer.write_all(&data).unwrap();
-            let (_compressed, hash) = writer.finish().unwrap();
-            // TODO same type as base?
-            // let final_obj = Object::new_commit(uncompressed_length, hash, &compressed);
-            // final_obj.write().unwrap();
+            let (_, deltas) = handle_delta(r).unwrap();
+            let ot: ObjectType = object_type.into();
+            let object = Object::from_pack_deltas(&object_data, &deltas, &ot);
+            object.write().unwrap();
             // assert!(final_obj.size == target_size);
-
-            let sha = hex::encode(hash);
 
             let compressed_size = z.total_in() as usize;
             println!(
-                "{sha} commit {uncompressed_length} {} {offset} {}",
+                "{} {} {uncompressed_length} {} {offset} {}",
+                object.hash_str(),
+                ot,
                 compressed_size + 20 + 2,
                 hex::encode(base_sha)
             );

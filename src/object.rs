@@ -8,7 +8,7 @@ use std::{
 
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 
-use crate::pack::PackObjectType;
+use crate::pack::{PackDelta, PackObjectType};
 
 pub(crate) fn to_stdout(content: String) -> anyhow::Result<(), anyhow::Error> {
     let stdout = std::io::stdout();
@@ -113,6 +113,7 @@ pub(crate) struct Object {
     #[allow(dead_code)]
     object_type: ObjectType,
     // TODO usize vs u64?
+    // what is this? size without header atm? but does that make sense?
     pub size: usize,
     hash: [u8; 20],
     // TODO refactor later - does not really make sense to be here
@@ -147,6 +148,40 @@ impl Object {
             .write_all(format!("{} {}\0", object_type, size).as_bytes())
             .unwrap();
         writer.write_all(data).unwrap();
+        let (compressed, hash) = writer.finish().unwrap();
+
+        Object {
+            object_type: object_type.clone(),
+            size,
+            hash,
+            compressed,
+        }
+    }
+
+    pub fn from_pack_deltas(
+        base: &[u8],
+        deltas: &Vec<PackDelta>,
+        object_type: &ObjectType,
+    ) -> Self {
+        let mut obj: Vec<u8> = Vec::new();
+        for delta in deltas {
+            match delta {
+                PackDelta::Insert(data) => obj.extend_from_slice(data),
+                PackDelta::Copy { offset, size } => {
+                    let offset = *offset as usize;
+                    let size = *size as usize;
+                    obj.extend_from_slice(&base[offset..offset + size]);
+                }
+            }
+        }
+
+        let size = obj.len();
+        let buf = Vec::new();
+        let mut writer = GitObjectWriter::new(buf);
+        writer
+            .write_all(format!("{} {}\0", object_type, size).as_bytes())
+            .unwrap();
+        writer.write_all(&obj).unwrap();
         let (compressed, hash) = writer.finish().unwrap();
 
         Object {
@@ -219,16 +254,21 @@ impl Object {
     }
 
     pub fn content(&self) -> anyhow::Result<String> {
+        // codecrafters tests seem to use it even for commit results
         // assert!(self.object_type == ObjectType::Blob);
+
         let z = ZlibDecoder::new(&self.compressed[..]);
         let mut r = BufReader::new(z);
 
         // skip header
+        // TODO parse type
         r.skip_until(0)?;
 
         let mut content = Vec::new();
         r.take(self.size.try_into()?).read_to_end(&mut content)?;
         assert!(content.len() == self.size);
+
+        // TODO handle different ObjectTypes?
         let content = str::from_utf8(content.as_slice())?;
         Ok(content.to_string())
     }
