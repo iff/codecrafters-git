@@ -235,10 +235,10 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
             // +----------+============+
 
             let len = offset_or_len as usize;
-            println!(
-                "append: {len} bytes to read and total remaining = {}",
-                r.len()
-            );
+            // println!(
+            //     "append: {len} bytes to read and total remaining = {}",
+            //     r.len()
+            // );
             let (r, new_data) = take(len)(r)?;
 
             deltas.push(PackDelta::Insert(new_data.to_owned()));
@@ -289,12 +289,11 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
                 size = 0x10000;
             }
 
-            let bytes_consumed = offset_bits.count_ones() as u64;
-
-            println!(
-                "copy  : {bytes_consumed} bytes to read and total remaining = {}. offset = {offset}",
-                r.len()
-            );
+            // let bytes_consumed = offset_bits.count_ones() as u64;
+            // println!(
+            //     "copy  : {bytes_consumed} bytes to read and total remaining = {}. offset = {offset}",
+            //     r.len()
+            // );
 
             deltas.push(PackDelta::Copy { offset, size });
 
@@ -309,7 +308,7 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
 
 pub(crate) fn parse_object<'a>(
     object_type: PackObjectType,
-    uncompressed_length: u64,
+    inflated_length: u64,
     input: &'a [u8],
 ) -> (&'a [u8], PackEntry<'a>) {
     let mut rest = input;
@@ -318,22 +317,22 @@ pub(crate) fn parse_object<'a>(
         PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob => {}
         PackObjectType::OffsetDelta => {
             let (new_rest, base_obj_offset) = parse_ofs_delta_offset(rest).unwrap();
-            rest = new_rest;
             delta_info = Some(DeltaInfo::Offset(base_obj_offset as usize));
+            rest = new_rest;
         }
         PackObjectType::ReferenceDelta => {
             // TODO correct version handling
             // 2 | 3 => 20 bytes SHA‑1
             // 4     => 32 bytes SHA‑256 (v4 packs)
             let base_sha = &rest[..20];
-            rest = &rest[20..];
             delta_info = Some(DeltaInfo::RefHash(base_sha.to_owned()));
+            rest = &rest[20..];
         }
     }
 
     let payload = &rest;
     let mut z = ZlibDecoder::new(rest);
-    let mut data = vec![0u8; uncompressed_length as usize];
+    let mut data = vec![0u8; inflated_length as usize];
     z.read_exact(&mut data).unwrap();
 
     // all this just to understand how much data we need to read from rest?
@@ -342,7 +341,7 @@ pub(crate) fn parse_object<'a>(
 
     let entry = PackEntry {
         object_type,
-        size: uncompressed_length,
+        size: inflated_length,
         delta_info,
         payload,
     };
@@ -365,7 +364,7 @@ fn base_from<'a>(
     base: DeltaInfo,
     offset_type: &HashMap<usize, ObjectType>,
 ) -> (ObjectType, Vec<u8>) {
-    // TODO we need recursion to resolve this
+    // TODO we need recursion to resolve this and get the object at the location again
     match base {
         DeltaInfo::Offset(delta) => {
             // FIXME why correction? same for all runs?
