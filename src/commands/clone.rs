@@ -207,15 +207,15 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     assert!(version == 2);
     offset -= rest.len();
 
-    let mut rest = rest;
-    for _ in 0..num_objects {
-        let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
-            .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-
-        let new_rest = pack::parse_object(data, object_type, length, new_rest, offset);
-        offset += rest.len() - new_rest.len();
-        rest = new_rest;
-    }
+    // let mut rest = rest;
+    // for _ in 0..num_objects {
+    //     let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
+    //         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+    //
+    //     let new_rest = pack::parse_object(data, object_type, length, new_rest, offset);
+    //     offset += rest.len() - new_rest.len();
+    //     rest = new_rest;
+    // }
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer

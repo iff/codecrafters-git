@@ -1,12 +1,12 @@
-use std::{fmt::Display, io::Write};
+use std::{collections::HashMap, fmt::Display};
 
 use flate2::read::ZlibDecoder;
 use nom::{bytes::complete::take, error::Error, error::ErrorKind, number::complete::u8, IResult};
 use std::io::Read;
 
-use crate::object::{GitObjectWriter, Object, ObjectType};
+use crate::object::{Object, ObjectType};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PackObjectType {
     Commit = 1,
     Tree = 2,
@@ -42,6 +42,26 @@ impl TryFrom<u8> for PackObjectType {
             _ => Err("unknown pack object type"),
         }
     }
+}
+
+pub enum PackDelta {
+    Insert(Vec<u8>),
+    Copy { offset: u64, size: u64 },
+}
+
+#[derive(Clone, Debug)]
+pub enum DeltaInfo {
+    Offset(usize),    // backward distance in bytes to base object
+    RefHash(Vec<u8>), // 20‑ or 32‑byte hash
+}
+
+#[derive(Debug)]
+pub struct PackEntry<'a> {
+    pub object_type: PackObjectType,
+    pub size: u64,
+    pub delta_info: Option<DeltaInfo>,
+    /// points at the start of the zlib‑compressed payload
+    pub payload: &'a [u8],
 }
 
 fn u32_from_be_bytes(data: &[u8]) -> u32 {
@@ -122,7 +142,7 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
     )))
 }
 
-fn parse_ofs_delta_offset(start_of_obj: usize, input: &[u8]) -> IResult<&[u8], usize> {
+fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     // offset encoding:
     // n bytes with MSB set in all but the last one.
     // The offset is then the number constructed by
@@ -133,28 +153,17 @@ fn parse_ofs_delta_offset(start_of_obj: usize, input: &[u8]) -> IResult<&[u8], u
 
     // The first payload contributes the high‑order bits *without* a left‑shift.
     // (Git’s spec says the first byte’s 7 bits are the most‑significant part.)
-    let mut offset: usize = first_payload as usize;
+    let mut offset: u64 = first_payload as u64;
     let mut cont = first_cont;
 
     while cont {
         let (new_rest, (payload, more)) = git_varint_byte(rest)?;
-        offset = (offset << 7) | (payload as usize);
+        offset = (offset << 7) | (payload as u64);
         rest = new_rest;
         cont = more;
     }
 
-    // ---- 3️⃣  Convert to a backward distance -----------------------------
-    // The stored value is the *distance* from the start of the current
-    // object to the start of the base object, *excluding* the current
-    // object's header itself. Therefore:
-    let distance = start_of_obj.checked_sub(offset).ok_or_else(|| {
-        nom::Err::Failure(nom::error::Error::new(
-            rest,
-            nom::error::ErrorKind::TooLarge,
-        ))
-    })?;
-
-    Ok((rest, distance))
+    Ok((rest, offset))
 }
 
 pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
@@ -210,12 +219,7 @@ pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)
     Ok((rest, (obj_type, size)))
 }
 
-pub enum PackDelta {
-    Insert(Vec<u8>),
-    Copy { offset: u64, size: u64 },
-}
-
-fn handle_delta<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<PackDelta>> {
+fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
     let mut deltas: Vec<PackDelta> = Vec::new();
     let mut rest_decompressed = input;
     while !rest_decompressed.is_empty() {
@@ -301,88 +305,79 @@ fn handle_delta<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<PackDelta>> {
 }
 
 pub(crate) fn parse_object<'a>(
-    data: &'a [u8],
     object_type: PackObjectType,
     uncompressed_length: u64,
     input: &'a [u8],
-    offset: usize,
-) -> &'a [u8] {
-    let start_idx = offset; // we dont update the offset after parsing the header
-
+) -> (&'a [u8], PackEntry<'a>) {
     let mut rest = input;
+    let mut delta_info = None;
     match object_type {
-        pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-            // NOTE: uncompressed_length can be 0 (zero-sized blobs)
-            // this implementation handles this case
-            let mut z = ZlibDecoder::new(rest);
-            let mut data = vec![0u8; uncompressed_length as usize];
-            z.read_exact(&mut data).unwrap();
-
-            let compressed_size = z.total_in() as usize;
-            let ot: ObjectType = pot.into();
-            let object = Object::from_pack(&ot, &data);
-            object.write().unwrap();
-
-            // debug output matching 'git verify-pack --verbose'
-            println!(
-                "{} {} {uncompressed_length} {} {offset}",
-                object.hash_str(),
-                ot,
-                object.compressed.len(),
-                // TODO I dont understand how to compute this length? does it include the header?
-                // and what does object.size actually contain? the compressed size without the
-                // header?
-                // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
-            );
-
-            if compressed_size == 0 {
-                // TODO why? just tested with trial and error? always the same?
-                // empty data gets the zlib header (2 bytes) + compressed empty block (1 byte) +
-                // Adler-32 checksum (4 bytes) + potential padding = ~8 bytes total?
-                &rest[compressed_size + 8..]
-            } else {
-                &rest[compressed_size..]
-            }
-        }
+        PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob => {}
         PackObjectType::OffsetDelta => {
-            // TODO combine with RefDelta.. just different header parsing
-
-            let (rest, base_obj_offset) = parse_ofs_delta_offset(offset, rest).unwrap();
-            // TODO here we need access to the full data stream to decide what we append
-            let base = &data[start_idx - base_obj_offset..];
-
-            let mut z = ZlibDecoder::new(rest);
-            let mut data = vec![0u8; uncompressed_length as usize];
-            z.read_exact(&mut data).unwrap();
-
-            // source size (variable-length encoded) should match the size of the base object
-            // this probably does not include the header of the binary on disk?
-            let (r, src_size) = git_varint(&data).unwrap();
-
-            // target size (variable-length encoded) should validate the final object size
-            let (r, target_size) = git_varint(r).unwrap();
-
-            let (_, deltas) = handle_delta(r).unwrap();
-            let ot: ObjectType = object_type.into();
-            let object = Object::from_pack_deltas(base, &deltas, &ot);
-            object.write().unwrap();
-
-            let compressed_size = z.total_in() as usize;
-            println!(
-                "{} {} {uncompressed_length} {} {offset}",
-                object.hash_str(),
-                ot,
-                compressed_size + 20 + 2,
-            );
-            &rest[compressed_size..]
+            let (new_rest, base_obj_offset) = parse_ofs_delta_offset(rest).unwrap();
+            rest = new_rest;
+            delta_info = Some(DeltaInfo::Offset(base_obj_offset as usize));
         }
         PackObjectType::ReferenceDelta => {
             // TODO correct version handling
             // 2 | 3 => 20 bytes SHA‑1
             // 4     => 32 bytes SHA‑256 (v4 packs)
             let base_sha = &rest[..20];
+            rest = &rest[20..];
+            delta_info = Some(DeltaInfo::RefHash(base_sha.to_owned()));
+        }
+    }
 
-            let base_object = match Object::from_hash(hex::encode(base_sha).as_str()) {
+    let payload = &rest;
+    let mut z = ZlibDecoder::new(rest);
+    let mut data = vec![0u8; uncompressed_length as usize];
+    z.read_exact(&mut data).unwrap();
+
+    // all this just to understand how much data we need to read from rest?
+    // maybe just as easy to keep the decompressed bytes?
+    let compressed_size = z.total_in() as usize;
+
+    let entry = PackEntry {
+        object_type,
+        size: uncompressed_length,
+        delta_info,
+        payload,
+    };
+
+    // NOTE: uncompressed_length can be 0 (zero-sized blobs)
+    // this implementation handles this case
+    if compressed_size == 0 {
+        // TODO why? just tested with trial and error? always the same?
+        // empty data gets the zlib header (2 bytes) + compressed empty block (1 byte) +
+        // Adler-32 checksum (4 bytes) + potential padding = ~8 bytes total?
+        (&rest[compressed_size + 8..], entry)
+    } else {
+        (&rest[compressed_size..], entry)
+    }
+}
+
+fn base_from<'a>(
+    pack_objects: &HashMap<usize, PackEntry<'a>>,
+    offset: &usize,
+    base: DeltaInfo,
+) -> Vec<u8> {
+    // TODO we need recursion to resolve this
+    match base {
+        DeltaInfo::Offset(delta) => {
+            let offset = offset.checked_sub(delta).unwrap();
+            println!("accessing pack_object at {}", offset);
+            let entry = pack_objects.get(&offset).unwrap();
+            let mut z = ZlibDecoder::new(entry.payload);
+            let mut data = vec![0u8; entry.size as usize];
+            z.read_exact(&mut data).unwrap();
+
+            data
+        }
+        DeltaInfo::RefHash(base_sha) => {
+            // TODO here we assume it has already written to the .git folder
+            // we can also reconstruct it again from the pack objects but need a mapping for the
+            // hash
+            let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
                 Ok(obj) => obj,
                 Err(_e) => {
                     println!("{}", hex::encode(base_sha));
@@ -394,36 +389,43 @@ pub(crate) fn parse_object<'a>(
             let mut object_data = Vec::new();
             z.read_to_end(&mut object_data).unwrap();
 
-            // advance rest pointer
-            rest = &rest[20..];
+            object_data
+        }
+    }
+}
 
-            let mut z = ZlibDecoder::new(rest);
-            let mut data = vec![0u8; uncompressed_length as usize];
-            z.read_exact(&mut data).unwrap();
+pub(crate) fn reconstruct_objects<'a>(pack_objects: &HashMap<usize, PackEntry<'a>>) {
+    for (offset, entry) in pack_objects {
+        match &entry.object_type {
+            pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
+                let mut z = ZlibDecoder::new(entry.payload);
+                let mut data = vec![0u8; entry.size as usize];
+                z.read_exact(&mut data).unwrap();
 
-            // source size (variable-length encoded) should match the size of the base object
-            // this probably does not include the header of the binary on disk?
-            let (r, src_size) = git_varint(&data).unwrap();
-            assert!(base_object.size as u64 == src_size);
+                let ot: ObjectType = pot.to_owned().into();
+                let object = Object::from_pack(&ot, &data);
 
-            // target size (variable-length encoded) should validate the final object size
-            let (r, target_size) = git_varint(r).unwrap();
+                // TODO maybe we dont want to write this out?
+                object.write().unwrap();
+            }
+            pot @ (PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta) => {
+                let base = base_from(pack_objects, offset, entry.delta_info.clone().unwrap());
 
-            let (_, deltas) = handle_delta(r).unwrap();
-            let ot: ObjectType = object_type.into();
-            let object = Object::from_pack_deltas(&object_data, &deltas, &ot);
-            object.write().unwrap();
-            // assert!(final_obj.size == target_size);
+                // source size (variable-length encoded) should match the size of the base object
+                // this probably does not include the header of the binary on disk?
+                let (r, _src_size) = git_varint(entry.payload).unwrap();
+                // assert!(base_object.size as u64 == src_size);
 
-            let compressed_size = z.total_in() as usize;
-            println!(
-                "{} {} {uncompressed_length} {} {offset} {}",
-                object.hash_str(),
-                ot,
-                compressed_size + 20 + 2,
-                hex::encode(base_sha)
-            );
-            &rest[compressed_size..]
+                // target size (variable-length encoded) should validate the final object size
+                let (r, _target_size) = git_varint(r).unwrap();
+
+                let (_, deltas) = handle_delta(r).unwrap();
+                let ot: ObjectType = pot.to_owned().into();
+                let object = Object::from_pack_deltas(&base, &deltas, &ot);
+                // TODO maybe we dont want to write this out?
+                object.write().unwrap();
+                // assert!(final_obj.size == target_size);
+            }
         }
     }
 }
