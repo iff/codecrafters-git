@@ -10,7 +10,10 @@
 // ls-remote <url> HEAD
 // clone <url> <dir>
 
-use std::{collections::HashSet, env, fs};
+use std::{
+    collections::{BTreeMap, HashSet},
+    env, fs,
+};
 
 use nom::{
     bytes::complete::{is_not, tag, take, take_until},
@@ -22,8 +25,8 @@ use nom::{
 };
 use reqwest::header;
 
-use crate::commands::init;
 use crate::pack;
+use crate::{commands::init, pack::PackEntry};
 
 struct RefSpec {
     #[allow(dead_code)]
@@ -201,21 +204,25 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     let mut offset = rest.len();
-    let data = &rest;
     let (rest, (version, num_objects)) =
         pack::parse_header(rest).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
     assert!(version == 2);
     offset -= rest.len();
 
-    // let mut rest = rest;
-    // for _ in 0..num_objects {
-    //     let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
-    //         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
-    //
-    //     let new_rest = pack::parse_object(data, object_type, length, new_rest, offset);
-    //     offset += rest.len() - new_rest.len();
-    //     rest = new_rest;
-    // }
+    let mut rest = rest;
+    let mut pack_objects: BTreeMap<usize, PackEntry> = BTreeMap::new();
+    for _ in 0..num_objects {
+        let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
+            .map_err(|e| anyhow::anyhow!("Failed to parse pack object header: {:?}", e))?;
+        let (new_rest, entry) = pack::parse_object(object_type, length, new_rest);
+        pack_objects.insert(offset, entry);
+
+        offset += rest.len() - new_rest.len();
+        rest = new_rest;
+    }
+
+    // reconstruct objects
+    pack::reconstruct_objects(&pack_objects);
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer

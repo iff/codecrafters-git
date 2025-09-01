@@ -24,7 +24,6 @@ pub(crate) fn invoke(pack_file: &str) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to parse pack object header: {:?}", e))?;
         let (new_rest, entry) = pack::parse_object(object_type, length, new_rest);
         pack_objects.insert(offset, entry);
-        println!("{offset}");
 
         offset += rest.len() - new_rest.len();
         rest = new_rest;
