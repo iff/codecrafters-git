@@ -363,19 +363,21 @@ fn base_from<'a>(
     pack_objects: &BTreeMap<usize, PackEntry<'a>>,
     offset: &usize,
     base: DeltaInfo,
-) -> Vec<u8> {
+    offset_type: &HashMap<usize, ObjectType>,
+) -> (ObjectType, Vec<u8>) {
     // TODO we need recursion to resolve this
     match base {
         DeltaInfo::Offset(delta) => {
-            println!("offset = {offset}, delta = {delta}");
+            // FIXME why correction? same for all runs?
             let offset = offset.checked_sub(delta + 128).unwrap();
-            println!("accessing pack_object at {}", offset);
             let entry = pack_objects.get(&offset).unwrap();
+            let ot = offset_type.get(&offset).unwrap();
+
             let mut z = ZlibDecoder::new(entry.payload);
             let mut data = vec![0u8; entry.size as usize];
             z.read_exact(&mut data).unwrap();
 
-            data
+            (ot.clone(), data)
         }
         DeltaInfo::RefHash(base_sha) => {
             // TODO here we assume it has already written to the .git folder
@@ -393,12 +395,13 @@ fn base_from<'a>(
             let mut object_data = Vec::new();
             z.read_to_end(&mut object_data).unwrap();
 
-            object_data
+            (base_object.object_type, object_data)
         }
     }
 }
 
 pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'a>>) {
+    let mut offset_type: HashMap<usize, ObjectType> = HashMap::new();
     for (offset, entry) in pack_objects {
         let mut z = ZlibDecoder::new(entry.payload);
         let mut data = vec![0u8; entry.size as usize];
@@ -406,10 +409,17 @@ pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'
 
         let object = match &entry.object_type {
             pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
+                offset_type.insert(*offset, pot.clone().into());
                 Object::from_pack(pot.clone().into(), &data)
             }
             PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta => {
-                let base = base_from(pack_objects, offset, entry.delta_info.clone().unwrap());
+                let (ot, base) = base_from(
+                    pack_objects,
+                    offset,
+                    entry.delta_info.clone().unwrap(),
+                    &offset_type,
+                );
+                offset_type.insert(*offset, ot.clone());
 
                 // source size (variable-length encoded) should match the size of the base object
                 // this probably does not include the header of the binary on disk?
@@ -420,7 +430,7 @@ pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'
                 let (r, _target_size) = git_varint(r).unwrap();
 
                 let (_, deltas) = handle_delta(r).unwrap();
-                Object::from_pack_deltas(&base, &deltas)
+                Object::from_pack_deltas(&base, &deltas, ot)
 
                 // assert!(final_obj.size == target_size);
             }

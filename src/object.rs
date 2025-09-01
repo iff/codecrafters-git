@@ -157,10 +157,7 @@ impl Object {
         }
     }
 
-    pub fn from_pack_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Self {
-        // TODO this needs to be extracted from base?
-        let object_type = ObjectType::Blob;
-
+    pub fn from_pack_deltas(base: &[u8], deltas: &Vec<PackDelta>, object_type: ObjectType) -> Self {
         let mut obj: Vec<u8> = Vec::new();
         for delta in deltas {
             match delta {
@@ -209,6 +206,27 @@ impl Object {
             hash,
             compressed,
         })
+    }
+
+    fn parse_header(data: &[u8]) -> anyhow::Result<(ObjectType, usize)> {
+        let mut r = BufReader::new(data);
+
+        // extract content: blob <size>\0<content>
+        let mut header = Vec::new();
+        r.read_until(0, &mut header)?;
+        let content = String::from(CString::from_vec_with_nul(header)?.to_str()?);
+
+        let Some((object_type, size)) = content.split_once(' ') else {
+            return Err(anyhow::Error::msg(format!("cant parse header {}", content)));
+        };
+        let size = size.parse::<usize>()?;
+        match object_type {
+            "commit" => Ok((ObjectType::Commit, size)),
+            "tree" => Ok((ObjectType::Tree, size)),
+            "blob" => Ok((ObjectType::Blob, size)),
+            "tag" => Ok((ObjectType::Tag, size)),
+            _ => Err(anyhow::Error::msg("unable to parse object type")),
+        }
     }
 
     pub fn from_hash(hash: &str) -> anyhow::Result<Object> {
