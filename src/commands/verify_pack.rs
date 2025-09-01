@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     io::{BufReader, Read},
 };
 
@@ -17,7 +17,7 @@ pub(crate) fn invoke(pack_file: &str) -> anyhow::Result<()> {
     assert!(version == 2);
     offset += data.len() - rest.len();
 
-    let mut pack_objects: HashMap<usize, PackEntry> = HashMap::new();
+    let mut pack_objects: BTreeMap<usize, PackEntry> = BTreeMap::new();
     let mut rest = rest;
     for _ in 0..num_objects {
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)

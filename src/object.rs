@@ -110,8 +110,7 @@ impl TreeObject {
 }
 
 pub(crate) struct Object {
-    #[allow(dead_code)]
-    object_type: ObjectType,
+    pub object_type: ObjectType,
     // TODO usize vs u64?
     // what is this? size without header atm? but does that make sense?
     pub size: usize,
@@ -158,11 +157,10 @@ impl Object {
         }
     }
 
-    pub fn from_pack_deltas(
-        base: &[u8],
-        deltas: &Vec<PackDelta>,
-        object_type: &ObjectType,
-    ) -> Self {
+    pub fn from_pack_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Self {
+        // TODO this needs to be extracted from base?
+        let object_type = ObjectType::Commit;
+
         let mut obj: Vec<u8> = Vec::new();
         for delta in deltas {
             match delta {

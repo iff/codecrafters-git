@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+};
 
 use flate2::read::ZlibDecoder;
 use nom::{bytes::complete::take, error::Error, error::ErrorKind, number::complete::u8, IResult};
@@ -357,14 +360,15 @@ pub(crate) fn parse_object<'a>(
 }
 
 fn base_from<'a>(
-    pack_objects: &HashMap<usize, PackEntry<'a>>,
+    pack_objects: &BTreeMap<usize, PackEntry<'a>>,
     offset: &usize,
     base: DeltaInfo,
 ) -> Vec<u8> {
     // TODO we need recursion to resolve this
     match base {
         DeltaInfo::Offset(delta) => {
-            let offset = offset.checked_sub(delta).unwrap();
+            println!("offset = {offset}, delta = {delta}");
+            let offset = offset.checked_sub(delta + 128).unwrap();
             println!("accessing pack_object at {}", offset);
             let entry = pack_objects.get(&offset).unwrap();
             let mut z = ZlibDecoder::new(entry.payload);
@@ -394,39 +398,50 @@ fn base_from<'a>(
     }
 }
 
-pub(crate) fn reconstruct_objects<'a>(pack_objects: &HashMap<usize, PackEntry<'a>>) {
+pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'a>>) {
     for (offset, entry) in pack_objects {
-        match &entry.object_type {
+        let mut z = ZlibDecoder::new(entry.payload);
+        let mut data = vec![0u8; entry.size as usize];
+        z.read_exact(&mut data).unwrap();
+
+        let object = match &entry.object_type {
             pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-                let mut z = ZlibDecoder::new(entry.payload);
-                let mut data = vec![0u8; entry.size as usize];
-                z.read_exact(&mut data).unwrap();
-
                 let ot: ObjectType = pot.to_owned().into();
-                let object = Object::from_pack(&ot, &data);
-
-                // TODO maybe we dont want to write this out?
-                object.write().unwrap();
+                Object::from_pack(&ot, &data)
             }
-            pot @ (PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta) => {
+            PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta => {
                 let base = base_from(pack_objects, offset, entry.delta_info.clone().unwrap());
 
                 // source size (variable-length encoded) should match the size of the base object
                 // this probably does not include the header of the binary on disk?
-                let (r, _src_size) = git_varint(entry.payload).unwrap();
+                let (r, _src_size) = git_varint(&data).unwrap();
                 // assert!(base_object.size as u64 == src_size);
 
                 // target size (variable-length encoded) should validate the final object size
                 let (r, _target_size) = git_varint(r).unwrap();
 
                 let (_, deltas) = handle_delta(r).unwrap();
-                let ot: ObjectType = pot.to_owned().into();
-                let object = Object::from_pack_deltas(&base, &deltas, &ot);
-                // TODO maybe we dont want to write this out?
-                object.write().unwrap();
+                Object::from_pack_deltas(&base, &deltas)
+
                 // assert!(final_obj.size == target_size);
             }
-        }
+        };
+
+        // TODO maybe we dont want to write this out?
+        object.write().unwrap();
+
+        // verbose
+        println!(
+            "{} {} {} {} {offset}",
+            object.hash_str(),
+            object.object_type,
+            entry.size,
+            object.compressed.len(),
+            // TODO I dont understand how to compute this length? does it include the header?
+            // and what does object.size actually contain? the compressed size without the
+            // header?
+            // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
+        );
     }
 }
 
