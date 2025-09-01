@@ -406,8 +406,7 @@ pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'
 
         let object = match &entry.object_type {
             pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-                let ot: ObjectType = pot.to_owned().into();
-                Object::from_pack(&ot, &data)
+                Object::from_pack(pot.clone().into(), &data)
             }
             PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta => {
                 let base = base_from(pack_objects, offset, entry.delta_info.clone().unwrap());

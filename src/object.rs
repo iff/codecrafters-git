@@ -138,7 +138,7 @@ impl Object {
         }
     }
 
-    pub fn from_pack(object_type: &ObjectType, data: &[u8]) -> Self {
+    pub fn from_pack(object_type: ObjectType, data: &[u8]) -> Self {
         // TODO ugly that we need to decompress and compress again
         let size = data.len();
         let buf = Vec::new();
@@ -159,7 +159,7 @@ impl Object {
 
     pub fn from_pack_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Self {
         // TODO this needs to be extracted from base?
-        let object_type = ObjectType::Commit;
+        let object_type = ObjectType::Blob;
 
         let mut obj: Vec<u8> = Vec::new();
         for delta in deltas {
