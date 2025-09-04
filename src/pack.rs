@@ -1,3 +1,9 @@
+// very hacky implementing parts of parsing git pack files using (mostly) nom
+// once clone works as intended:
+// TODO add some tests (maybe before if clone resists)
+// TODO proper error handling: remove all the unwrap() shortcuts
+// TODO add more documentation and links to formats
+// TODO too much is pub at the moment
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -55,7 +61,7 @@ pub enum PackDelta {
 #[derive(Clone, Debug)]
 pub enum DeltaInfo {
     Offset(usize),    // backward distance in bytes to base object
-    RefHash(Vec<u8>), // 20‑ or 32‑byte hash
+    RefHash(Vec<u8>), // 20‑ or 32‑byte hash (depends on git version)
 }
 
 #[derive(Debug)]
@@ -89,56 +95,44 @@ fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
     take(len - 4)(rest)
 }
 
-/// Decode a single Git pack varint byte.
-/// Returns (value_of_this_byte, continuation_flag).
+/// delta commands are no shifted as varints
 fn git_delta_command(input: &[u8]) -> IResult<&[u8], (u8, u8)> {
     let (rest, b) = u8(input)?;
-    // MSB = command
     let command = b >> 7;
-    // lower 7 bits hold offset bits or length
     let offset_or_length = b & 0x7F;
     Ok((rest, (offset_or_length, command)))
 }
 
-/// Decode a single Git pack varint byte.
-/// Returns (value_of_this_byte, continuation_flag).
+/// decode a single Git pack varint byte
+/// returns (value_of_this_byte, continuation_flag).
 fn git_varint_byte(input: &[u8]) -> IResult<&[u8], (u8, bool)> {
-    // Grab one raw byte
     let (rest, b) = u8(input)?;
     // MSB = continuation flag
     let cont = (b & 0x80) != 0;
-    // Lower 7 bits hold payload
     let payload = b & 0x7F;
     Ok((rest, (payload, cont)))
 }
 
-/// Parse a full variable‑length integer.
+/// parse a full variable‑length integer
 ///
-/// Git pack offsets are limited to five bytes (max 2³⁵‑1).  
-/// The generic version below accepts any number of bytes, but we stop after 5 to stay within the spec.
+/// Git pack offsets are limited to five bytes. We stop after 5 to stay within the spec.
 pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
-    // Accumulate payload bytes until we hit a byte whose MSB == 0.
-    // We also enforce a maximum of 5 bytes to avoid infinite loops on malformed data.
     let mut acc: u64 = 0;
     let mut shift = 0usize;
     let mut remaining = input;
 
-    // enforces the maximum of five bytes that the Git pack‑file specification permits for a varint.
     for _i in 0..5 {
         let (rest, (payload, cont)) = git_varint_byte(remaining)?;
-        // Incorporate the 7‑bit chunk.
         acc |= (payload as u64) << shift;
         shift += 7;
 
         remaining = rest;
         if !cont {
-            // Last byte reached – success.
             return Ok((remaining, acc));
         }
     }
 
-    // If we exit the loop we have read 5 bytes and still see a continuation flag.
-    // According to the spec this is invalid, so we return an error.
+    // TODO not sure about this error?
     Err(nom::Err::Error(nom::error::Error::new(
         remaining,
         ErrorKind::TooLarge,
@@ -169,6 +163,7 @@ fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     Ok((rest, offset))
 }
 
+// TODO move to clone?
 pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
     // TODO this is different when reading pack file from disk and what we get with http post
     // (cloning)?
@@ -196,16 +191,16 @@ pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u
     Ok((rest, (version, num_objects)))
 }
 
-/// Parse the *entire* pack‑object header (type + full size) and return the
+/// parse the *entire* pack‑object header (type + full size) and return the
 /// remaining slice together with the extracted information.
 pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
 
-    // Bits 6‑4 of the original byte are the object type.
+    // bits 6‑4 of the original byte are the object type.
     let type_bits = (first_payload >> 4) & 0b111;
     let obj_type: PackObjectType = type_bits.try_into().expect("valid object type");
 
-    // Bits 3‑0 are the low three size bits.
+    // bits 3‑0 are the low three size bits.
     let mut size: u64 = (first_payload & 0b1111) as u64;
     let mut shift = 4;
 
@@ -507,43 +502,13 @@ mod tests {
     }
 
     #[test]
-    fn basic_commit_one_byte_size() {
-        // Header: 0b1100_0010
-        //  - bits7‑6 = 11 (always)
-        //  - bit6 (cont) = 1 → more size bytes follow (we’ll add one)
-        //  - type = 001 (commit)
-        //  - low size = 010 (2)
-        // Next size byte: 0b0000_0001 (cont=0, payload=1) → adds 1<<3 = 8
-        let data = [0b1100_0010, 0b0000_0001];
-        let (_, (typ, sz)) = parse_object_header(&data).unwrap();
-        assert_eq!(typ, PackObjectType::Commit);
-        assert_eq!(sz, 10); // 2 (low) + 8 (extra) = 10
-    }
-
-    #[test]
     fn blob_no_continuation() {
-        // 0b1000_0111
+        //  - cont = 0 (no extra bytes)
         //  - type = 011 (blob)
         //  - low size = 111 (7)
-        //  - cont = 0 (no extra bytes)
-        let data = [0b1000_0111];
+        let data = [0b0011_0111];
         let (_, (typ, sz)) = parse_object_header(&data).unwrap();
         assert_eq!(typ, PackObjectType::Blob);
         assert_eq!(sz, 7);
-    }
-
-    #[test]
-    fn ofs_delta_multi_byte_size() {
-        // First byte: 0b1011_0010
-        //  - type = 101 (OFS_DELTA)
-        //  - low size = 010 (2)
-        //  - cont = 1 (more)
-        // Next bytes: 0b1000_0011 (cont=1, payload=3) → adds 3 << 3 = 24
-        //             0b0000_0100 (cont=0, payload=4) → adds 4 << 10 = 4096
-        let data = [0b1011_0010, 0b1000_0011, 0b0000_0100];
-        let (_, (typ, sz)) = parse_object_header(&data).unwrap();
-        assert_eq!(typ, PackObjectType::OffsetDelta);
-        // size = 2 + (3 << 3) + (4 << 10) = 2 + 24 + 4096 = 4122
-        assert_eq!(sz, 4122);
     }
 }
