@@ -1,0 +1,2 @@
+# rm -rf ../git-sample-3 && cargo run clone https://github.com/codecrafters-io/git-sample-3 ../git-sample-3
+v -d <(cargo run verify-pack test-pack/test.pack) <(git verify-pack --verbose test-pack/test.pack)
