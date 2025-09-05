@@ -221,6 +221,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         rest = new_rest;
     }
 
+    // TODO here we get: Result::unwrap() on an `Err` value: Custom { kind: InvalidInput, error: "corrupt deflate stream" }
+    // so something is broken with offsets when cloning?
     // reconstruct objects
     pack::reconstruct_objects(&pack_objects);
 
