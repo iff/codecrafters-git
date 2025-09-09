@@ -1,3 +1,11 @@
+//! Implements helpers and data structures to read Git pack files.
+//!
+//! # Limitations
+//! - only supports version 2
+//! - ...
+//!
+//! # Docs
+//! - [git pack format](https://git-scm.com/docs/gitformat-pack)
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -133,15 +141,19 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
     )))
 }
 
-/// OBJ_OFS_DELTA has (yet another) size encoding for the offset:
+/// Parses the OBJ_OFS_DELTA offset:
 ///   - n bytes with MSB set in all but the last one
 ///   - the offset is then the number constructed by concatenating the lower 7 bit of each byte
 ///   - and for n >= 2, add the magic numbers: 2^7 + 2^14 + ... + 2^(7*(n-1))
 ///
-/// Note that the a offset is a negative relative offset from the delta object's position in the pack.
-/// For details see:
-/// [git pack format](https://git-scm.com/docs/gitformat-pack#_pack_pack_files_have_the_following_format)
-/// [offset encoding](https://git-scm.com/docs/gitformat-pack#_original_version_1_pack_idx_files_have_the_following_format)
+/// # Returns
+///
+/// The returned offset is a negative relative offset from the delta object's position in the pack.
+///
+/// # Details
+///
+/// - [git pack format](https://git-scm.com/docs/gitformat-pack#_pack_pack_files_have_the_following_format)
+/// - [offset encoding](https://git-scm.com/docs/gitformat-pack#_original_version_1_pack_idx_files_have_the_following_format)
 fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
     let mut bytes_read = 1;
