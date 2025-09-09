@@ -32,41 +32,5 @@ pub(crate) fn invoke(pack_file: &str, verbose: bool) -> anyhow::Result<()> {
     // reconstruct objects
     pack::reconstruct_objects(&pack_objects, verbose);
 
-    // for (offset, entry) in pack_objects {
-    //     match entry.object_type {
-    //         pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-    //             println!(
-    //                 "{} {} {uncompressed_length} {} {offset}",
-    //                 object.hash_str(),
-    //                 ot,
-    //                 object.compressed.len(),
-    //                 // TODO I dont understand how to compute this length? does it include the header?
-    //                 // and what does object.size actually contain? the compressed size without the
-    //                 // header?
-    //                 // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
-    //             );
-    //         }
-    //         PackObjectType::OffsetDelta => {
-    //             println!(
-    //                 "{} {} {uncompressed_length} {} {offset}",
-    //                 object.hash_str(),
-    //                 ot,
-    //                 compressed_size + 20 + 2,
-    //             );
-    //         }
-    //         PackObjectType::ReferenceDelta => {
-    //             println!(
-    //                 "{} {} {uncompressed_length} {} {offset} {}",
-    //                 object.hash_str(),
-    //                 ot,
-    //                 compressed_size + 20 + 2,
-    //                 hex::encode(base_sha)
-    //             );
-    //         }
-    //     }
-    // }
-
-    // TODO parse crc and check
-
     Ok(())
 }

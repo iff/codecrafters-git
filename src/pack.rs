@@ -1,9 +1,3 @@
-// very hacky implementing parts of parsing git pack files using (mostly) nom
-// - TODO recursively resolve base_from
-// - TODO add some tests
-// - TODO proper error handling: remove all the unwrap() shortcuts
-// - TODO add more documentation and links to formats
-// - TODO too much is pub at the moment
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,

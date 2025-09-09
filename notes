@@ -1,0 +1,18 @@
+- all stages (and tests) completed, needs cleanup and still some corner cases
+- pack
+  - recursively resolve base_from
+    - and delta offset still seems to have a bug (see verify-pack of git-sample-2)
+    - related to not understanding magic offset that seems to be necessary (read the docs again)
+  - add some tests
+  - proper error handling: remove all the unwrap() shortcuts
+    - nom error handling
+  - add more documentation and links to formats
+  - too much is pub at the moment
+- object
+  - refactor object types and parsing from/to (currently a lot of manual code everywhere)
+- commit tree
+  - get author from env or config
+- clone
+  - move checkout to own mod and implement git checkout (extend sloppy checkout we have now)
+  - check crc
+  - write pack and idx files to disk (instead of all objects)
