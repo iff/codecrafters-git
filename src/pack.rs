@@ -1,9 +1,8 @@
 // very hacky implementing parts of parsing git pack files using (mostly) nom
-// once clone works as intended:
-// TODO add some tests (maybe before if clone resists)
-// TODO proper error handling: remove all the unwrap() shortcuts
-// TODO add more documentation and links to formats
-// TODO too much is pub at the moment
+// - TODO add some tests
+// - TODO proper error handling: remove all the unwrap() shortcuts
+// - TODO add more documentation and links to formats
+// - TODO too much is pub at the moment
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -379,7 +378,10 @@ fn base_from<'a>(
     }
 }
 
-pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'a>>) {
+pub(crate) fn reconstruct_objects<'a>(
+    pack_objects: &BTreeMap<usize, PackEntry<'a>>,
+    verbose: bool,
+) {
     let mut offset_type: HashMap<usize, ObjectType> = HashMap::new();
     for (offset, entry) in pack_objects {
         let mut z = ZlibDecoder::new(entry.payload);
@@ -418,18 +420,19 @@ pub(crate) fn reconstruct_objects<'a>(pack_objects: &BTreeMap<usize, PackEntry<'
         // TODO maybe we dont want to write this out?
         object.write().unwrap();
 
-        // verbose
-        println!(
-            "{} {} {} {} {offset}",
-            object.hash_str(),
-            object.object_type,
-            entry.size,
-            object.compressed.len(),
-            // TODO I dont understand how to compute this length? does it include the header?
-            // and what does object.size actually contain? the compressed size without the
-            // header?
-            // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
-        );
+        if verbose {
+            println!(
+                "{} {} {} {} {offset}",
+                object.hash_str(),
+                object.object_type,
+                entry.size,
+                object.compressed.len(),
+                // TODO I dont understand how to compute this length? does it include the header?
+                // and what does object.size actually contain? the compressed size without the
+                // header?
+                // 2 + object.compressed.len() + format!("{ot} {}\0", object.size).len(),
+            );
+        }
     }
 }
 

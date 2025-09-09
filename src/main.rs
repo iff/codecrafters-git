@@ -51,6 +51,8 @@ enum Command {
     VerifyPack {
         #[arg(action)]
         pack_file: String,
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -69,6 +71,8 @@ fn main() -> anyhow::Result<()> {
         Command::HashObject { write, path } => commands::hash_object::invoke(write, &path),
         Command::LsTree { name_only, hash } => commands::ls_tree::invoke(name_only, &hash),
         Command::WriteTree {} => commands::write_tree::invoke(),
-        Command::VerifyPack { pack_file } => commands::verify_pack::invoke(&pack_file),
+        Command::VerifyPack { pack_file, verbose } => {
+            commands::verify_pack::invoke(&pack_file, verbose)
+        }
     }
 }

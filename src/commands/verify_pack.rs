@@ -5,7 +5,7 @@ use std::{
 
 use crate::pack::{self, PackEntry};
 
-pub(crate) fn invoke(pack_file: &str) -> anyhow::Result<()> {
+pub(crate) fn invoke(pack_file: &str, verbose: bool) -> anyhow::Result<()> {
     let file = std::fs::File::open(pack_file)?;
     let mut reader = BufReader::new(file);
     let mut data = Vec::new();
@@ -30,7 +30,7 @@ pub(crate) fn invoke(pack_file: &str) -> anyhow::Result<()> {
     }
 
     // reconstruct objects
-    pack::reconstruct_objects(&pack_objects);
+    pack::reconstruct_objects(&pack_objects, verbose);
 
     // for (offset, entry) in pack_objects {
     //     match entry.object_type {
