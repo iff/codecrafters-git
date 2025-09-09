@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
+    io::Write,
 };
 
 use nom::{
@@ -14,7 +15,7 @@ use nom::{
 };
 use reqwest::header;
 
-use crate::{commands::init, pack::PackEntry};
+use crate::{commands::init, object::TreeObject, pack::PackEntry};
 use crate::{
     object::{Object, ObjectType},
     pack,
@@ -160,6 +161,37 @@ fn unpack_chunks(input: &[u8]) -> IResult<&[u8], Vec<u8>, Error<&[u8]>> {
     Ok((rest, data))
 }
 
+fn checkout(tree: &[TreeObject], base: String) -> anyhow::Result<()> {
+    for obj in tree {
+        let o = Object::from_hash(hex::encode(obj.sha_bytes).as_str())?;
+        // println!(
+        //     "{}: {} at {} is {}",
+        //     obj.name,
+        //     obj.mode,
+        //     hex::encode(obj.sha_bytes),
+        //     o.object_type,
+        // );
+        match o.object_type {
+            ObjectType::Blob => {
+                let (_, content) = o.raw_content()?;
+                let mut out = fs::File::create(format!("{base}/{}", &obj.name))?;
+                out.write_all(&content)?;
+            }
+            ObjectType::Tree => {
+                let new_base = format!("{base}/{}", &obj.name);
+                fs::create_dir_all(new_base.clone())?;
+                let t = TreeObject::read(&o)?;
+                checkout(&t, new_base)?;
+            }
+            _ => {
+                assert!(false);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let path = match path {
         None => {
@@ -253,17 +285,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // checkout (without clearing etc)
     let head = Object::from_hash(&refs.head)?;
     assert!(head.object_type == ObjectType::Commit);
-    println!("{}", head.content()?);
-
-    // TODO recurse
-    for obj in head.tree()? {
-        println!(
-            "{}: {} at {}",
-            obj.name,
-            obj.mode,
-            hex::encode(obj.sha_bytes)
-        );
-    }
+    let tree = head.tree()?;
+    checkout(&tree, String::from("."))?;
 
     Ok(())
 }
