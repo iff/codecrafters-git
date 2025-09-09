@@ -508,4 +508,28 @@ mod tests {
         assert_eq!(typ, PackObjectType::Blob);
         assert_eq!(sz, 7);
     }
+
+    #[test]
+    fn test_single_byte_delta_offset() {
+        // offset byte: 0x05 (continuation=0, payload=5)
+        let offset_bytes = vec![0x05];
+        let (_, base_start) = parse_ofs_delta_offset(&offset_bytes).unwrap();
+        assert_eq!(base_start, 5);
+    }
+
+    #[test]
+    fn test_multi_byte_delta_offset() {
+        // We want an offset of 0x1234 = 4660 decimal.
+        // Encode as base‑128 varint:
+        //   0x1234 = 0b0001_0010_0011_0100
+        //   Split into 7‑bit groups from the LSB:
+        //     0b011_0100 = 0x34
+        //     0b010_0010 = 0x24
+        //   Emit high‑order group first, with continuation flag on all but last:
+        //     first byte:  0x12 | 0x80 = 0xa4
+        //     second byte: 0x34        = 0x34
+        let offset_bytes = vec![0xa4, 0x34];
+        let (_, base_start) = parse_ofs_delta_offset(&offset_bytes).unwrap();
+        assert_eq!(base_start as usize, 0x1234);
+    }
 }
