@@ -215,12 +215,7 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
             // +----------+============+
 
             let len = offset_or_len as usize;
-            // println!(
-            //     "append: {len} bytes to read and total remaining = {}",
-            //     r.len()
-            // );
             let (r, new_data) = take(len)(r)?;
-
             deltas.push(PackDelta::Insert(new_data.to_owned()));
 
             rest_decompressed = r;
@@ -268,12 +263,6 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
             if size == 0 {
                 size = 0x10000;
             }
-
-            // let bytes_consumed = offset_bits.count_ones() as u64;
-            // println!(
-            //     "copy  : {bytes_consumed} bytes to read and total remaining = {}. offset = {offset}",
-            //     r.len()
-            // );
 
             deltas.push(PackDelta::Copy { offset, size });
 
