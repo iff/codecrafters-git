@@ -260,13 +260,11 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         rest = new_rest;
     }
 
-    // TODO here we get: Result::unwrap() on an `Err` value: Custom { kind: InvalidInput, error: "corrupt deflate stream" }
-    // so something is broken with offsets when cloning?
-    // reconstruct objects
     pack::reconstruct_objects(&pack_objects);
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer
+    assert!(rest.len() == 20);
 
     Ok(())
 }
