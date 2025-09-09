@@ -14,8 +14,11 @@ use nom::{
 };
 use reqwest::header;
 
-use crate::pack;
 use crate::{commands::init, pack::PackEntry};
+use crate::{
+    object::{Object, ObjectType},
+    pack,
+};
 
 struct RefSpec {
     #[allow(dead_code)]
@@ -245,6 +248,22 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer
     assert!(rest.len() == 20);
+
+    // TODO check out the latest commit to the working directory - this basically implements a
+    // checkout (without clearing etc)
+    let head = Object::from_hash(&refs.head)?;
+    assert!(head.object_type == ObjectType::Commit);
+    println!("{}", head.content()?);
+
+    // TODO recurse
+    for obj in head.tree()? {
+        println!(
+            "{}: {} at {}",
+            obj.name,
+            obj.mode,
+            hex::encode(obj.sha_bytes)
+        );
+    }
 
     Ok(())
 }

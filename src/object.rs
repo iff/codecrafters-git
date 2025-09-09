@@ -24,14 +24,11 @@ pub(crate) fn to_stdout(content: String) -> anyhow::Result<(), anyhow::Error> {
 //     .try_into()
 //     .map_err(|v: Vec<u8>| anyhow::Error::msg("hash has to have length 20"))?;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ObjectType {
-    #[allow(dead_code)]
     Commit,
-    #[allow(dead_code)]
     Tree,
     Blob,
-    #[allow(dead_code)]
     Tag,
 }
 
@@ -208,11 +205,59 @@ impl Object {
         })
     }
 
-    #[allow(dead_code)]
+    pub fn from_hash(hash: &str) -> anyhow::Result<Object> {
+        // TODO this should just populate the object and then we can get/parse the content?
+        let file = std::fs::File::open(object_path(hash))?;
+        let mut r = BufReader::new(file);
+        let mut data = Vec::new();
+        r.read_to_end(&mut data)?;
+        let compressed_content = data.clone();
+
+        let z = ZlibDecoder::new(&data[..]);
+        let mut r = BufReader::new(z);
+
+        let mut header = Vec::new();
+        r.read_until(0, &mut header)?;
+        let (ot, size) = Object::parse_header(&header)?;
+
+        Ok(Object {
+            object_type: ot,
+            size,
+            hash: hex::decode(hash).context("decoding hash")?[0..20]
+                .try_into()
+                .with_context(|| format!("coercing hash to u8 array: {}", hash))?,
+            compressed: compressed_content,
+        })
+    }
+
+    pub fn tree(&self) -> anyhow::Result<Vec<TreeObject>> {
+        assert!(self.object_type == ObjectType::Commit);
+        let z = ZlibDecoder::new(&self.compressed[..]);
+        let mut r = BufReader::new(z);
+
+        // skip header
+        r.skip_until(0)?;
+
+        let mut tree = String::from("");
+        r.read_line(&mut tree)?;
+
+        let Some((t, tree_sha)) = tree.split_once(' ') else {
+            return Err(anyhow::Error::msg(format!(
+                "cant parse tree line: {}",
+                tree
+            )));
+        };
+        assert!(t == "tree");
+        let tree_sha = tree_sha.trim_end();
+        let tree = Object::from_hash(tree_sha)?;
+        assert!(tree.object_type == ObjectType::Tree);
+        TreeObject::read(&tree)
+    }
+
     fn parse_header(data: &[u8]) -> anyhow::Result<(ObjectType, usize)> {
         let mut r = BufReader::new(data);
 
-        // extract content: blob <size>\0<content>
+        // extract content: <type> <size>\0<content>
         let mut header = Vec::new();
         r.read_until(0, &mut header)?;
         let content = String::from(CString::from_vec_with_nul(header)?.to_str()?);
@@ -230,60 +275,27 @@ impl Object {
         }
     }
 
-    pub fn from_hash(hash: &str) -> anyhow::Result<Object> {
-        // TODO this should just populate the object and then we can get/parse the content?
-        let file = std::fs::File::open(object_path(hash))?;
-        let mut r = BufReader::new(file);
-        let mut data = Vec::new();
-        r.read_to_end(&mut data)?;
-        let compressed_content = data.clone();
-
-        let z = ZlibDecoder::new(&data[..]);
-        let mut r = BufReader::new(z);
-
-        // extract content: blob <size>\0<content>
-        let mut header = Vec::new();
-        r.read_until(0, &mut header)?;
-        let content = String::from(CString::from_vec_with_nul(header)?.to_str()?);
-
-        let Some((object_type, size)) = content.split_once(' ') else {
-            return Err(anyhow::Error::msg(format!("cant parse header {}", content)));
-        };
-        let ot = match object_type {
-            "commit" => ObjectType::Commit,
-            "tree" => ObjectType::Tree,
-            "blob" => ObjectType::Blob,
-            "tag" => ObjectType::Tag,
-            _ => return Err(anyhow::Error::msg("unable to parse object type")),
-        };
-        // assert!(ot == ObjectType::Blob);
-
-        let size = size.parse::<usize>()?;
-
-        Ok(Object {
-            object_type: ot,
-            size,
-            hash: hex::decode(hash).context("decoding hash")?[0..20]
-                .try_into()
-                .with_context(|| format!("coercing hash to u8 array: {}", hash))?,
-            compressed: compressed_content,
-        })
-    }
-
-    pub fn content(&self) -> anyhow::Result<String> {
-        // codecrafters tests seem to use it even for commit results
-        // assert!(self.object_type == ObjectType::Blob);
-
+    pub fn raw_content(&self) -> anyhow::Result<(ObjectType, Vec<u8>)> {
         let z = ZlibDecoder::new(&self.compressed[..]);
         let mut r = BufReader::new(z);
 
         // skip header
         // TODO parse type
-        r.skip_until(0)?;
+        let mut header = Vec::new();
+        r.read_until(0, &mut header)?;
+        let (ot, size) = Object::parse_header(&header)?;
+        assert!(size == self.size);
 
         let mut content = Vec::new();
         r.take(self.size.try_into()?).read_to_end(&mut content)?;
         assert!(content.len() == self.size);
+        Ok((ot, content))
+    }
+
+    pub fn content(&self) -> anyhow::Result<String> {
+        // codecrafters tests seem to use it even for commit results
+        // assert!(self.object_type == ObjectType::Blob);
+        let (_, content) = self.raw_content()?;
 
         // TODO handle different ObjectTypes?
         let content = str::from_utf8(content.as_slice())?;

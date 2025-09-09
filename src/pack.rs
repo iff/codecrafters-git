@@ -7,7 +7,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
-    io::{BufRead, BufReader},
 };
 
 use flate2::read::ZlibDecoder;
@@ -375,7 +374,6 @@ fn base_from<'a>(
         }
         DeltaInfo::RefHash(base_sha) => {
             // TODO dangerous assumption: assume referred sha was already written to the .git folder
-            println!("{}", hex::encode(base_sha.clone()));
             let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
                 Ok(obj) => obj,
                 Err(_e) => {
@@ -383,19 +381,7 @@ fn base_from<'a>(
                     panic!("failed to create object from sha: hash does not (yet) exists");
                 }
             };
-            let compressed = base_object.compressed;
-            let z = ZlibDecoder::new(&compressed[..]);
-            // let mut object_data = Vec::new();
-            // z.read_to_end(&mut object_data).unwrap();
-
-            // TODO strip header and assert type is the same!
-            let mut r = BufReader::new(z);
-            r.skip_until(0).unwrap();
-            let mut content = Vec::new();
-            r.take(base_object.size.try_into().unwrap())
-                .read_to_end(&mut content)
-                .unwrap();
-
+            let (_, content) = base_object.raw_content().unwrap();
             (base_object.object_type, content)
         }
     }
