@@ -237,6 +237,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
 
     // data is sent in chunks, each chunk is wrapped in the pkt-line format
+    // TODO once everything works we can unpack on the fly (assuming data is split at object
+    // boundaries?)
     let (_rest, data) =
         unpack_chunks(rest).map_err(|e| anyhow::anyhow!("Failed to parse chunk len: {:?}", e))?;
 
