@@ -1,3 +1,7 @@
+Barely functional solution - requires refactoring and bug fixes (see notes).
+
+# Codecrafters: Build Your Own Git
+
 [![progress-banner](https://backend.codecrafters.io/progress/git/870c0759-3d41-48cb-9329-eebdb591a7a9)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
 
 This is a starting point for Rust solutions to the
