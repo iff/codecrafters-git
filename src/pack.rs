@@ -519,7 +519,7 @@ mod tests {
         //   Emit high‑order group first, with continuation flag on all but last:
         //     first byte:  0x12 | 0x80 = 0xa4
         //     second byte: 0x34        = 0x34
-        // 
+        //
         // With magic numbers for 2-byte offset: 0x1234 + 2^7 = 4660 + 128 = 4788
         let offset_bytes = vec![0xa4, 0x34];
         let (_, base_start) = parse_ofs_delta_offset(&offset_bytes).unwrap();
