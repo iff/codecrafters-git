@@ -1,4 +1,5 @@
 // very hacky implementing parts of parsing git pack files using (mostly) nom
+// - TODO recursively resolve base_from
 // - TODO add some tests
 // - TODO proper error handling: remove all the unwrap() shortcuts
 // - TODO add more documentation and links to formats
@@ -364,8 +365,8 @@ fn base_from<'a>(
             let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
                 Ok(obj) => obj,
                 Err(_e) => {
-                    println!("{}", hex::encode(base_sha));
-                    panic!("cant crate object from hash. hash does not exist?");
+                    println!("ref hash with sha={}", hex::encode(base_sha));
+                    panic!("failed to create object from sha: hash does not (yet) exists");
                 }
             };
             let compressed = base_object.compressed;
