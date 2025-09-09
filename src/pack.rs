@@ -133,18 +133,21 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
     )))
 }
 
+/// OBJ_OFS_DELTA has (yet another) size encoding for the offset:
+///   - n bytes with MSB set in all but the last one
+///   - the offset is then the number constructed by concatenating the lower 7 bit of each byte
+///   - and for n >= 2, add the magic numbers: 2^7 + 2^14 + ... + 2^(7*(n-1))
+///
+/// Note that the a offset is a negative relative offset from the delta object's position in the pack.
+/// For details see:
+/// [git pack format](https://git-scm.com/docs/gitformat-pack#_pack_pack_files_have_the_following_format)
+/// [offset encoding](https://git-scm.com/docs/gitformat-pack#_original_version_1_pack_idx_files_have_the_following_format)
 fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
-    // offset encoding:
-    // n bytes with MSB set in all but the last one.
-    // The offset is then the number constructed by concatenating the lower 7 bit of each byte
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
-
-    // The first payload contributes the high‑order bits *without* a left‑shift.
-    // (Git’s spec says the first byte’s 7 bits are the most‑significant part.)
-    let mut offset: u64 = first_payload as u64;
-    let mut cont = first_cont;
     let mut bytes_read = 1;
 
+    let mut offset: u64 = first_payload as u64;
+    let mut cont = first_cont;
     while cont {
         let (new_rest, (payload, more)) = git_varint_byte(rest)?;
         offset = (offset << 7) | (payload as u64);
@@ -153,7 +156,7 @@ fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
         bytes_read += 1;
     }
 
-    // and for n >= 2, add the magic numbers: 2^7 + 2^14 + ... + 2^(7*(n-1))
+    // add the magic numbers
     if bytes_read >= 2 {
         for i in 1..bytes_read {
             offset += 1u64 << (7 * i);

@@ -1,12 +1,12 @@
 - all stages (and tests) completed, needs cleanup and still some corner cases
-- pack
+o pack
   - recursively resolve base_from
-    o and delta offset still seems to have a bug (see verify-pack of git-sample-2) due to missing recursion?
+    r and delta offset still seems to have a bug (see verify-pack of git-sample-2) due to missing recursion?
     x related to not understanding magic offset that seems to be necessary (read the docs again)
-  - add some tests
+  o add more documentation and links to formats
+  - add more tests
   - proper error handling: remove all the unwrap() shortcuts
     - nom error handling
-  - add more documentation and links to formats
   - too much is pub at the moment
 - object
   - refactor object types and parsing from/to (currently a lot of manual code everywhere)
