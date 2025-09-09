@@ -88,14 +88,6 @@ fn parse_head(input: &str) -> IResult<&str, (&str, HashSet<String>)> {
 }
 
 fn parse_ref_list(input: &str) -> IResult<&str, RefSpec> {
-    // 003d9b36649874280c532f7c06f16b7d7c9aa86073c3 refs/heads/main
-    // 003e3fcffffcacaf807d6eaf97ce5ac8131fab2a39db refs/pull/1/head
-    // 003e48fc09b90b2db56dd7a36e70fc98991086ace882 refs/pull/2/head
-
-    // let (_rest, (refs, _)) = many_till(parse_ref_list, tag("\n"))
-    //     .parse(rest)
-    //     .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
-
     let (rest, _len) = take(4u8)(input)?;
     let (rest, sha) = take(40u8)(rest)?;
     let (rest, _) = char(' ')(rest)?;
@@ -234,7 +226,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let pack = response.bytes()?;
 
     let (rest, _) = parse_network_header(&pack)
-        .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("failed to parse pack: {:?}", e))?;
 
     // data is sent in chunks, each chunk is wrapped in the pkt-line format
     // TODO once everything works we can unpack on the fly (assuming data is split at object
@@ -243,8 +235,8 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         unpack_chunks(rest).map_err(|e| anyhow::anyhow!("Failed to parse chunk len: {:?}", e))?;
 
     let mut offset = rest.len();
-    let (rest, (version, num_objects)) =
-        pack::parse_header(&data).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+    let (rest, (version, num_objects)) = pack::parse_header(&data)
+        .map_err(|e| anyhow::anyhow!("failed to parse pack header: {:?}", e))?;
     assert!(version == 2);
     offset -= rest.len();
 
@@ -252,7 +244,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let mut pack_objects: BTreeMap<usize, PackEntry> = BTreeMap::new();
     for _ in 0..num_objects {
         let (new_rest, (object_type, length)) = pack::parse_object_header(rest)
-            .map_err(|e| anyhow::anyhow!("Failed to parse pack object header: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("failed to parse pack object header: {:?}", e))?;
         let (new_rest, entry) = pack::parse_object(object_type, length, new_rest);
         pack_objects.insert(offset, entry);
 
