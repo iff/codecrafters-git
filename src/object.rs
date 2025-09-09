@@ -208,6 +208,7 @@ impl Object {
         })
     }
 
+    #[allow(dead_code)]
     fn parse_header(data: &[u8]) -> anyhow::Result<(ObjectType, usize)> {
         let mut r = BufReader::new(data);
 
