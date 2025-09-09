@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
+    io::{BufRead, BufReader},
 };
 
 use flate2::read::ZlibDecoder;
@@ -340,7 +341,7 @@ pub(crate) fn parse_object<'a>(
 
 fn base_from<'a>(
     pack_objects: &BTreeMap<usize, PackEntry<'a>>,
-    offset: &usize,
+    offset: usize,
     base: DeltaInfo,
     offset_type: &HashMap<usize, ObjectType>,
 ) -> (ObjectType, Vec<u8>) {
@@ -348,9 +349,23 @@ fn base_from<'a>(
     match base {
         DeltaInfo::Offset(delta) => {
             // FIXME why correction? same for all runs?
-            let offset = offset.checked_sub(delta + 128).unwrap();
-            let entry = pack_objects.get(&offset).unwrap();
-            let ot = offset_type.get(&offset).unwrap();
+            // seems like it varies. why do we need it only for the first delta?
+            let delta_offset = offset.checked_sub(delta + 128).unwrap();
+            println!("getting object at offset = {delta_offset}, currently at = {offset}, delta = {delta}");
+            let (entry, delta_offset) = match pack_objects.get(&delta_offset) {
+                Some(e) => (e, delta_offset),
+                None => {
+                    println!(
+                        "getting object at offset = {}, currently at = {offset}, delta = {delta}",
+                        delta_offset + 128
+                    );
+                    (
+                        pack_objects.get(&(delta_offset + 128)).unwrap(),
+                        delta_offset + 128,
+                    )
+                }
+            };
+            let ot = offset_type.get(&delta_offset).unwrap();
 
             let mut z = ZlibDecoder::new(entry.payload);
             let mut data = vec![0u8; entry.size as usize];
@@ -359,9 +374,8 @@ fn base_from<'a>(
             (ot.clone(), data)
         }
         DeltaInfo::RefHash(base_sha) => {
-            // TODO here we assume it has already written to the .git folder
-            // we can also reconstruct it again from the pack objects but need a mapping for the
-            // hash
+            // TODO dangerous assumption: assume referred sha was already written to the .git folder
+            println!("{}", hex::encode(base_sha.clone()));
             let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
                 Ok(obj) => obj,
                 Err(_e) => {
@@ -370,11 +384,19 @@ fn base_from<'a>(
                 }
             };
             let compressed = base_object.compressed;
-            let mut z = ZlibDecoder::new(&compressed[..]);
-            let mut object_data = Vec::new();
-            z.read_to_end(&mut object_data).unwrap();
+            let z = ZlibDecoder::new(&compressed[..]);
+            // let mut object_data = Vec::new();
+            // z.read_to_end(&mut object_data).unwrap();
 
-            (base_object.object_type, object_data)
+            // TODO strip header and assert type is the same!
+            let mut r = BufReader::new(z);
+            r.skip_until(0).unwrap();
+            let mut content = Vec::new();
+            r.take(base_object.size.try_into().unwrap())
+                .read_to_end(&mut content)
+                .unwrap();
+
+            (base_object.object_type, content)
         }
     }
 }
@@ -389,6 +411,7 @@ pub(crate) fn reconstruct_objects<'a>(
         let mut data = vec![0u8; entry.size as usize];
         z.read_exact(&mut data).unwrap();
 
+        let mut base_sha = String::from("");
         let object = match &entry.object_type {
             pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
                 offset_type.insert(*offset, pot.clone().into());
@@ -397,11 +420,16 @@ pub(crate) fn reconstruct_objects<'a>(
             PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta => {
                 let (ot, base) = base_from(
                     pack_objects,
-                    offset,
+                    *offset,
                     entry.delta_info.clone().unwrap(),
                     &offset_type,
                 );
                 offset_type.insert(*offset, ot.clone());
+
+                if verbose {
+                    let base_obj = Object::from_pack(ot.clone(), &base);
+                    base_sha = base_obj.hash_str();
+                }
 
                 // source size (variable-length encoded) should match the size of the base object
                 // this probably does not include the header of the binary on disk?
@@ -423,7 +451,7 @@ pub(crate) fn reconstruct_objects<'a>(
 
         if verbose {
             println!(
-                "{} {} {} {} {offset}",
+                "{} {} {} {}? {offset} {base_sha}",
                 object.hash_str(),
                 object.object_type,
                 entry.size,
