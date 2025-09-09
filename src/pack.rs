@@ -86,7 +86,7 @@ fn pkt_line(data: &str) -> Vec<u8> {
     packet
 }
 
-fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
+pub fn read_pkt_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
     // NOTE the length is encoded as ASCII hex characters and not binary
     // I guess it makes it more readable when debugging and sidesteps endianness issue?
     // still need to find a better way to write this
@@ -161,21 +161,6 @@ fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     }
 
     Ok((rest, offset))
-}
-
-// TODO move to clone?
-pub(crate) fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
-    // TODO this is different when reading pack file from disk and what we get with http post
-    // (cloning)?
-    let (rest, pack_file) = read_pkt_line(input)?;
-    assert!(pack_file == "packfile\n".as_bytes());
-
-    // TODO? not sure what this actually is?
-    // [50, 48, 48, 52, 1]
-    let (rest, _unclear) = take(5u8)(rest)?;
-    // println!("{:?}", unclear);
-
-    Ok((rest, ()))
 }
 
 pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u8]>> {

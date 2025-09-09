@@ -19,6 +19,7 @@ use nom::{
     bytes::complete::{is_not, tag, take, take_until},
     character::complete::char,
     combinator::not,
+    error::Error,
     multi::fold_many0,
     sequence::{delimited, preceded},
     IResult, Parser,
@@ -141,6 +142,41 @@ impl Refs {
     }
 }
 
+fn parse_network_header(input: &[u8]) -> IResult<&[u8], (), Error<&[u8]>> {
+    let (rest, pack_file) = pack::read_pkt_line(input)?;
+    assert!(pack_file == "packfile\n".as_bytes());
+
+    Ok((rest, ()))
+}
+
+fn unpack_chunks(input: &[u8]) -> IResult<&[u8], Vec<u8>, Error<&[u8]>> {
+    // The Git protocol is sending the pack data in chunks wrapped in pkt-line format. Each chunk looks like:
+    // - 4 bytes for length header (eg. "2005")
+    // - 1 byte for stream code (0x01)
+    // - actual pack data
+
+    let mut rest = input;
+    let mut data: Vec<u8> = Vec::new();
+    while rest.len() > 5 {
+        let (new_rest, len) = take(4u8)(rest)?;
+        let (new_rest, code) = take(1u8)(new_rest)?;
+        // TODO is this always the case?
+        assert!(code[0] == 1);
+        let len = u16::from_str_radix(std::str::from_utf8(len).unwrap(), 16).unwrap();
+        let (new_rest, part) = take(len - 4 - 1)(new_rest)?;
+        data.extend(part);
+        rest = new_rest;
+    }
+
+    // seems to contain 48 48 48 48 (0000)
+    // guessing this is the end marker?
+    assert!(rest.len() == 4);
+    let zeros = u16::from_str_radix(std::str::from_utf8(rest).unwrap(), 16).unwrap();
+    assert!(zeros == 0);
+
+    Ok((rest, data))
+}
+
 pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     let path = match path {
         None => {
@@ -197,15 +233,16 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // https://github.com/git/git/blob/795ea8776befc95ea2becd8020c7a284677b4161/Documentation/gitformat-pack.txt
     let pack = response.bytes()?;
 
-    // trying to debug the response.. it seems to be different then what I get on disk after a new
-    // clone and idx is missing to run git verify-pack
-    // std::fs::write(String::from("sha.pack"), &pack[18..])?;
-    let (rest, _) = pack::parse_network_header(&pack)
+    let (rest, _) = parse_network_header(&pack)
         .map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+
+    // data is sent in chunks, each chunk is wrapped in the pkt-line format
+    let (_rest, data) =
+        unpack_chunks(rest).map_err(|e| anyhow::anyhow!("Failed to parse chunk len: {:?}", e))?;
 
     let mut offset = rest.len();
     let (rest, (version, num_objects)) =
-        pack::parse_header(rest).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
+        pack::parse_header(&data).map_err(|e| anyhow::anyhow!("Failed to parse pack: {:?}", e))?;
     assert!(version == 2);
     offset -= rest.len();
 
