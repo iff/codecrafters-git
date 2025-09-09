@@ -136,22 +136,28 @@ pub fn git_varint(input: &[u8]) -> IResult<&[u8], u64> {
 fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     // offset encoding:
     // n bytes with MSB set in all but the last one.
-    // The offset is then the number constructed by
-    // concatenating the lower 7 bit of each byte, and
-    // for n >= 2 adding 2^7 + 2^14 + ... + 2^(7*(n-1))
-    // to the result.
+    // The offset is then the number constructed by concatenating the lower 7 bit of each byte
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
 
     // The first payload contributes the high‑order bits *without* a left‑shift.
     // (Git’s spec says the first byte’s 7 bits are the most‑significant part.)
     let mut offset: u64 = first_payload as u64;
     let mut cont = first_cont;
+    let mut bytes_read = 1;
 
     while cont {
         let (new_rest, (payload, more)) = git_varint_byte(rest)?;
         offset = (offset << 7) | (payload as u64);
         rest = new_rest;
         cont = more;
+        bytes_read += 1;
+    }
+
+    // and for n >= 2, add the magic numbers: 2^7 + 2^14 + ... + 2^(7*(n-1))
+    if bytes_read >= 2 {
+        for i in 1..bytes_read {
+            offset += 1u64 << (7 * i);
+        }
     }
 
     Ok((rest, offset))
@@ -341,23 +347,8 @@ fn base_from<'a>(
     // TODO we need recursion to resolve this and get the object at the location again
     match base {
         DeltaInfo::Offset(delta) => {
-            // FIXME why correction? same for all runs?
-            // seems like it varies. why do we need it only for the first delta?
-            let delta_offset = offset.checked_sub(delta + 128).unwrap();
-            println!("getting object at offset = {delta_offset}, currently at = {offset}, delta = {delta}");
-            let (entry, delta_offset) = match pack_objects.get(&delta_offset) {
-                Some(e) => (e, delta_offset),
-                None => {
-                    println!(
-                        "getting object at offset = {}, currently at = {offset}, delta = {delta}",
-                        delta_offset + 128
-                    );
-                    (
-                        pack_objects.get(&(delta_offset + 128)).unwrap(),
-                        delta_offset + 128,
-                    )
-                }
-            };
+            let delta_offset = offset.checked_sub(delta).unwrap();
+            let entry = pack_objects.get(&delta_offset).unwrap();
             let ot = offset_type.get(&delta_offset).unwrap();
 
             let mut z = ZlibDecoder::new(entry.payload);
@@ -528,8 +519,10 @@ mod tests {
         //   Emit high‑order group first, with continuation flag on all but last:
         //     first byte:  0x12 | 0x80 = 0xa4
         //     second byte: 0x34        = 0x34
+        // 
+        // With magic numbers for 2-byte offset: 0x1234 + 2^7 = 4660 + 128 = 4788
         let offset_bytes = vec![0xa4, 0x34];
         let (_, base_start) = parse_ofs_delta_offset(&offset_bytes).unwrap();
-        assert_eq!(base_start as usize, 0x1234);
+        assert_eq!(base_start as usize, 0x1234 + 128);
     }
 }
