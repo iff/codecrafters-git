@@ -164,13 +164,6 @@ fn unpack_chunks(input: &[u8]) -> IResult<&[u8], Vec<u8>, Error<&[u8]>> {
 fn checkout(tree: &[TreeObject], base: String) -> anyhow::Result<()> {
     for obj in tree {
         let o = Object::from_hash(hex::encode(obj.sha_bytes).as_str())?;
-        // println!(
-        //     "{}: {} at {} is {}",
-        //     obj.name,
-        //     obj.mode,
-        //     hex::encode(obj.sha_bytes),
-        //     o.object_type,
-        // );
         match o.object_type {
             ObjectType::Blob => {
                 let (_, content) = o.raw_content()?;
@@ -184,7 +177,10 @@ fn checkout(tree: &[TreeObject], base: String) -> anyhow::Result<()> {
                 checkout(&t, new_base)?;
             }
             _ => {
-                assert!(false);
+                return Err(anyhow::anyhow!(
+                    "unexpected object type while checkout: {}",
+                    o.object_type
+                ));
             }
         }
     }
@@ -281,8 +277,6 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // TODO verify using something like our object writer
     assert!(rest.len() == 20);
 
-    // TODO check out the latest commit to the working directory - this basically implements a
-    // checkout (without clearing etc)
     let head = Object::from_hash(&refs.head)?;
     assert!(head.object_type == ObjectType::Commit);
     let tree = head.tree()?;
