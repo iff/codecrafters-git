@@ -1,15 +1,3 @@
-// Working with the git-pack web service to get the pack file
-// Decoding the pack file format (work in byte strings or else you'd split your hairs trying to find offset errors, note that offset are based on length of compressed data)
-// Working with git-delta objects
-//
-// The best reference I found was the book building git by James Coglan. Good luck to anyone attempting this, it's gonna take a few days the very least so be patient.
-//
-// checkout-empty <commit>
-// unpack-objects (undeltified)
-// unpack-objects (REF_DELTA)
-// ls-remote <url> HEAD
-// clone <url> <dir>
-
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
@@ -110,10 +98,10 @@ fn parse_ref_list(input: &str) -> IResult<&str, RefSpec> {
 impl Refs {
     pub(crate) fn from_response(response: &str) -> anyhow::Result<Self> {
         let (rest, _parsed) = validate_header(response)
-            .map_err(|e| anyhow::anyhow!("Failed to validate header: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("failed to validate header: {:?}", e))?;
 
         let (rest, (sha, capabilities)) =
-            parse_head(rest).map_err(|e| anyhow::anyhow!("Failed to parse head: {:?}", e))?;
+            parse_head(rest).map_err(|e| anyhow::anyhow!("failed to parse head: {:?}", e))?;
 
         let (_, refs) = fold_many0(
             preceded(not(tag("0000")), parse_ref_list),
@@ -124,7 +112,7 @@ impl Refs {
             },
         )
         .parse(rest)
-        .map_err(|e| anyhow::anyhow!("Failed to parse ref list: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("failed to parse ref list: {:?}", e))?;
 
         Ok(Refs {
             head: sha.to_owned(),
@@ -232,7 +220,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
     // TODO once everything works we can unpack on the fly (assuming data is split at object
     // boundaries?)
     let (_rest, data) =
-        unpack_chunks(rest).map_err(|e| anyhow::anyhow!("Failed to parse chunk len: {:?}", e))?;
+        unpack_chunks(rest).map_err(|e| anyhow::anyhow!("failed to parse chunk len: {:?}", e))?;
 
     let mut offset = rest.len();
     let (rest, (version, num_objects)) = pack::parse_header(&data)
