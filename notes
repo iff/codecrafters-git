@@ -1,8 +1,9 @@
 - all stages (and tests) completed, needs cleanup and still some corner cases
 o pack
-  - recursively resolve base_from
-    r and delta offset still seems to have a bug (see verify-pack of git-sample-2) due to missing recursion?
+  x recursively resolve base_from
+    x and delta offset still seems to have a bug (see verify-pack of git-sample-2) due to missing recursion?
     x related to not understanding magic offset that seems to be necessary (read the docs again)
+  x cleanup types for OffsetDelta and RefDelta
   o add more documentation and links to formats
   - add more tests
   - proper error handling: remove all the unwrap() shortcuts
