@@ -6,10 +6,7 @@
 //!
 //! # Docs
 //! - [git pack format](https://git-scm.com/docs/gitformat-pack)
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Display,
-};
+use std::{collections::BTreeMap, fmt::Display};
 
 use flate2::read::ZlibDecoder;
 use nom::{bytes::complete::take, error::Error, error::ErrorKind, number::complete::u8, IResult};
@@ -344,40 +341,6 @@ pub(crate) fn parse_object<'a>(
     }
 }
 
-fn base_from<'a>(
-    pack_objects: &BTreeMap<usize, PackEntry<'a>>,
-    offset: usize,
-    base: DeltaInfo,
-    offset_type: &HashMap<usize, ObjectType>,
-) -> (ObjectType, Vec<u8>) {
-    // TODO we need recursion to resolve this and get the object at the location again
-    match base {
-        DeltaInfo::Offset(delta) => {
-            let delta_offset = offset.checked_sub(delta).unwrap();
-            let entry = pack_objects.get(&delta_offset).unwrap();
-            let ot = offset_type.get(&delta_offset).unwrap();
-
-            let mut z = ZlibDecoder::new(entry.payload);
-            let mut data = vec![0u8; entry.size as usize];
-            z.read_exact(&mut data).unwrap();
-
-            (ot.clone(), data)
-        }
-        DeltaInfo::RefHash(base_sha) => {
-            // TODO dangerous assumption: assume referred sha was already written to the .git folder
-            let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
-                Ok(obj) => obj,
-                Err(_e) => {
-                    println!("ref hash with sha={}", hex::encode(base_sha));
-                    panic!("failed to create object from sha: hash does not (yet) exists");
-                }
-            };
-            let (_, content) = base_object.raw_content().unwrap();
-            (base_object.object_type, content)
-        }
-    }
-}
-
 pub fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
     let mut obj: Vec<u8> = Vec::new();
     for delta in deltas {
@@ -399,18 +362,15 @@ fn object_from<'a>(
     offset: usize,
 ) -> (ObjectType, Vec<u8>) {
     let object = pack_objects.get(&offset).unwrap();
+    let mut z = ZlibDecoder::new(object.payload);
+    let mut data = vec![0u8; object.size as usize];
+    z.read_exact(&mut data).unwrap();
+
     match &object.object_type {
         pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-            let mut z = ZlibDecoder::new(object.payload);
-            let mut data = vec![0u8; object.size as usize];
-            z.read_exact(&mut data).unwrap();
             (pot.clone().into(), data)
         }
         PackObjectType::OffsetDelta => {
-            let mut z = ZlibDecoder::new(object.payload);
-            let mut data = vec![0u8; object.size as usize];
-            z.read_exact(&mut data).unwrap();
-
             // TODO this information should be in the types
             let delta = &match object.delta_info {
                 Some(DeltaInfo::Offset(delta)) => delta,
@@ -420,25 +380,16 @@ fn object_from<'a>(
             let delta_offset = offset.checked_sub(*delta).unwrap();
             let (ot, obj) = object_from(pack_objects, delta_offset);
 
-            // source size (variable-length encoded) should match the size of the base object
             let (r, src_size) = git_varint(&data).unwrap();
             assert!(obj.len() as u64 == src_size);
-
-            // target size (variable-length encoded) should validate the final object size
             let (r, target_size) = git_varint(r).unwrap();
-
             let (_, deltas) = handle_delta(r).unwrap();
-
             let obj = apply_deltas(&obj, &deltas);
             assert!(obj.len() as u64 == target_size);
 
             (ot, obj)
         }
         PackObjectType::ReferenceDelta => {
-            let mut z = ZlibDecoder::new(object.payload);
-            let mut data = vec![0u8; object.size as usize];
-            z.read_exact(&mut data).unwrap();
-
             // TODO dangerous assumption: assume referred sha was already written to the .git folder
             // TODO unless we keep a parallel list from sha to binary we can only go via fs atm
             // TODO this information should be in the types
@@ -458,12 +409,8 @@ fn object_from<'a>(
 
             let (r, src_size) = git_varint(&data).unwrap();
             assert!(content.len() as u64 == src_size);
-
-            // target size (variable-length encoded) should validate the final object size
             let (r, target_size) = git_varint(r).unwrap();
-
             let (_, deltas) = handle_delta(r).unwrap();
-
             let obj = apply_deltas(&content, &deltas);
             assert!(obj.len() as u64 == target_size);
 
