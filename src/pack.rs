@@ -195,7 +195,7 @@ pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u
 
 /// Parse the *entire* pack‑object header (type + full size).
 /// Returns the remaining slice together with the extracted information.
-pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
+pub(crate) fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
 
     // bits 6‑4 of the original byte are the object type.
