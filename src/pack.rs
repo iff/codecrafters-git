@@ -53,7 +53,7 @@ impl TryFrom<u8> for PackObjectType {
     }
 }
 
-pub enum PackDelta {
+enum PackDelta {
     Insert(Vec<u8>),
     Copy { offset: u64, size: u64 },
 }
@@ -66,6 +66,8 @@ enum PackEntryType {
     ReferenceDelta(Vec<u8>), // 20‑ or 32‑byte hash (depends on git version)
 }
 
+/// Holds all the data we need to reconstruct an object in a second pass (see
+/// [`reconstruct_objects`]).
 pub struct PackEntry<'a> {
     object_type: PackEntryType,
     size: u64,
@@ -347,7 +349,7 @@ pub(crate) fn parse_object<'a>(
 
 /// Given a byte stream `base`, apply the delta operations.
 /// Returns object bytes after applying operations.
-pub fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
+fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
     let mut obj: Vec<u8> = Vec::new();
     for delta in deltas {
         match delta {
