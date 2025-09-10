@@ -8,8 +8,6 @@ use std::{
 
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 
-use crate::pack::{PackDelta, PackObjectType};
-
 pub(crate) fn to_stdout(content: String) -> anyhow::Result<(), anyhow::Error> {
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
@@ -39,19 +37,6 @@ impl fmt::Display for ObjectType {
             ObjectType::Tree => write!(f, "tree"),
             ObjectType::Blob => write!(f, "blob"),
             ObjectType::Tag => write!(f, "tag"),
-        }
-    }
-}
-
-impl From<PackObjectType> for ObjectType {
-    fn from(pack_type: PackObjectType) -> Self {
-        // TODO try_from with error for Delta encodings
-        match pack_type {
-            PackObjectType::Commit => ObjectType::Commit,
-            PackObjectType::Tree => ObjectType::Tree,
-            PackObjectType::Blob => ObjectType::Blob,
-            PackObjectType::OffsetDelta => panic!("no offset delta object type"),
-            PackObjectType::ReferenceDelta => panic!("no ref delta object type"),
         }
     }
 }
@@ -144,36 +129,6 @@ impl Object {
             .write_all(format!("{} {}\0", object_type, size).as_bytes())
             .unwrap();
         writer.write_all(data).unwrap();
-        let (compressed, hash) = writer.finish().unwrap();
-
-        Object {
-            object_type: object_type.clone(),
-            size,
-            hash,
-            compressed,
-        }
-    }
-
-    pub fn from_pack_deltas(base: &[u8], deltas: &Vec<PackDelta>, object_type: ObjectType) -> Self {
-        let mut obj: Vec<u8> = Vec::new();
-        for delta in deltas {
-            match delta {
-                PackDelta::Insert(data) => obj.extend_from_slice(data),
-                PackDelta::Copy { offset, size } => {
-                    let offset = *offset as usize;
-                    let size = *size as usize;
-                    obj.extend_from_slice(&base[offset..offset + size]);
-                }
-            }
-        }
-
-        let size = obj.len();
-        let buf = Vec::new();
-        let mut writer = GitObjectWriter::new(buf);
-        writer
-            .write_all(format!("{} {}\0", object_type, size).as_bytes())
-            .unwrap();
-        writer.write_all(&obj).unwrap();
         let (compressed, hash) = writer.finish().unwrap();
 
         Object {

@@ -57,21 +57,19 @@ pub enum PackDelta {
     Copy { offset: u64, size: u64 },
 }
 
-// TODO we should use the type system to make sure OffsetDelta has an offset and ReferenceDelta a
-// RefHash
-#[derive(Clone, Debug)]
-pub enum DeltaInfo {
-    Offset(usize),    // backward distance in bytes to base object
-    RefHash(Vec<u8>), // 20‑ or 32‑byte hash (depends on git version)
+enum PackEntryType {
+    Commit,
+    Tree,
+    Blob,
+    OffsetDelta(usize),      // backward distance in bytes to base object
+    ReferenceDelta(Vec<u8>), // 20‑ or 32‑byte hash (depends on git version)
 }
 
-#[derive(Debug)]
 pub struct PackEntry<'a> {
-    pub object_type: PackObjectType,
-    pub size: u64,
-    pub delta_info: Option<DeltaInfo>,
+    object_type: PackEntryType,
+    size: u64,
     /// points at the start of the zlib‑compressed payload
-    pub payload: &'a [u8],
+    payload: &'a [u8],
 }
 
 fn u32_from_be_bytes(data: &[u8]) -> u32 {
@@ -295,23 +293,24 @@ pub(crate) fn parse_object<'a>(
     input: &'a [u8],
 ) -> (&'a [u8], PackEntry<'a>) {
     let mut rest = input;
-    let mut delta_info = None;
-    match object_type {
-        PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob => {}
+    let pet = match object_type {
+        PackObjectType::Commit => PackEntryType::Commit,
+        PackObjectType::Tree => PackEntryType::Tree,
+        PackObjectType::Blob => PackEntryType::Blob,
         PackObjectType::OffsetDelta => {
             let (new_rest, base_obj_offset) = parse_ofs_delta_offset(rest).unwrap();
-            delta_info = Some(DeltaInfo::Offset(base_obj_offset as usize));
             rest = new_rest;
+            PackEntryType::OffsetDelta(base_obj_offset as usize)
         }
         PackObjectType::ReferenceDelta => {
             // TODO correct version handling
             // 2 | 3 => 20 bytes SHA‑1
             // 4     => 32 bytes SHA‑256 (v4 packs)
             let base_sha = &rest[..20];
-            delta_info = Some(DeltaInfo::RefHash(base_sha.to_owned()));
             rest = &rest[20..];
+            PackEntryType::ReferenceDelta(base_sha.to_owned())
         }
-    }
+    };
 
     let payload = &rest;
     let mut z = ZlibDecoder::new(rest);
@@ -323,9 +322,8 @@ pub(crate) fn parse_object<'a>(
     let compressed_size = z.total_in() as usize;
 
     let entry = PackEntry {
-        object_type,
+        object_type: pet,
         size: inflated_length,
-        delta_info,
         payload,
     };
 
@@ -367,16 +365,10 @@ fn object_from<'a>(
     z.read_exact(&mut data).unwrap();
 
     match &object.object_type {
-        pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-            (pot.clone().into(), data)
-        }
-        PackObjectType::OffsetDelta => {
-            // TODO this information should be in the types
-            let delta = &match object.delta_info {
-                Some(DeltaInfo::Offset(delta)) => delta,
-                Some(DeltaInfo::RefHash(_)) => panic!("OffsetDelta cant deal with RefHash"),
-                None => panic!("OffsetDelta needs offset"),
-            };
+        PackEntryType::Commit => (ObjectType::Commit, data),
+        PackEntryType::Tree => (ObjectType::Tree, data),
+        PackEntryType::Blob => (ObjectType::Blob, data),
+        PackEntryType::OffsetDelta(delta) => {
             let delta_offset = offset.checked_sub(*delta).unwrap();
             let (ot, obj) = object_from(pack_objects, delta_offset);
 
@@ -389,15 +381,9 @@ fn object_from<'a>(
 
             (ot, obj)
         }
-        PackObjectType::ReferenceDelta => {
+        PackEntryType::ReferenceDelta(base_sha) => {
             // TODO dangerous assumption: assume referred sha was already written to the .git folder
             // TODO unless we keep a parallel list from sha to binary we can only go via fs atm
-            // TODO this information should be in the types
-            let base_sha = match &object.delta_info {
-                Some(DeltaInfo::Offset(_)) => panic!("RefDelta cant deal with Offset"),
-                Some(DeltaInfo::RefHash(sha)) => sha,
-                None => panic!("RefDelta needs RefHash"),
-            };
             let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
                 Ok(obj) => obj,
                 Err(_e) => {
