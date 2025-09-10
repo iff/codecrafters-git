@@ -60,6 +60,8 @@ pub enum PackDelta {
     Copy { offset: u64, size: u64 },
 }
 
+// TODO we should use the type system to make sure OffsetDelta has an offset and ReferenceDelta a
+// RefHash
 #[derive(Clone, Debug)]
 pub enum DeltaInfo {
     Offset(usize),    // backward distance in bytes to base object
@@ -376,57 +378,112 @@ fn base_from<'a>(
     }
 }
 
+pub fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
+    let mut obj: Vec<u8> = Vec::new();
+    for delta in deltas {
+        match delta {
+            PackDelta::Insert(data) => obj.extend_from_slice(data),
+            PackDelta::Copy { offset, size } => {
+                let offset = *offset as usize;
+                let size = *size as usize;
+                obj.extend_from_slice(&base[offset..offset + size]);
+            }
+        }
+    }
+
+    obj
+}
+
+fn object_from<'a>(
+    pack_objects: &BTreeMap<usize, PackEntry<'a>>,
+    offset: usize,
+) -> (ObjectType, Vec<u8>) {
+    let object = pack_objects.get(&offset).unwrap();
+    match &object.object_type {
+        pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
+            let mut z = ZlibDecoder::new(object.payload);
+            let mut data = vec![0u8; object.size as usize];
+            z.read_exact(&mut data).unwrap();
+            (pot.clone().into(), data)
+        }
+        PackObjectType::OffsetDelta => {
+            let mut z = ZlibDecoder::new(object.payload);
+            let mut data = vec![0u8; object.size as usize];
+            z.read_exact(&mut data).unwrap();
+
+            // TODO this information should be in the types
+            let delta = &match object.delta_info {
+                Some(DeltaInfo::Offset(delta)) => delta,
+                Some(DeltaInfo::RefHash(_)) => panic!("OffsetDelta cant deal with RefHash"),
+                None => panic!("OffsetDelta needs offset"),
+            };
+            let delta_offset = offset.checked_sub(*delta).unwrap();
+            let (ot, obj) = object_from(pack_objects, delta_offset);
+
+            // source size (variable-length encoded) should match the size of the base object
+            let (r, src_size) = git_varint(&data).unwrap();
+            assert!(obj.len() as u64 == src_size);
+
+            // target size (variable-length encoded) should validate the final object size
+            let (r, target_size) = git_varint(r).unwrap();
+
+            let (_, deltas) = handle_delta(r).unwrap();
+
+            let obj = apply_deltas(&obj, &deltas);
+            assert!(obj.len() as u64 == target_size);
+
+            (ot, obj)
+        }
+        PackObjectType::ReferenceDelta => {
+            let mut z = ZlibDecoder::new(object.payload);
+            let mut data = vec![0u8; object.size as usize];
+            z.read_exact(&mut data).unwrap();
+
+            // TODO dangerous assumption: assume referred sha was already written to the .git folder
+            // TODO unless we keep a parallel list from sha to binary we can only go via fs atm
+            // TODO this information should be in the types
+            let base_sha = match &object.delta_info {
+                Some(DeltaInfo::Offset(_)) => panic!("RefDelta cant deal with Offset"),
+                Some(DeltaInfo::RefHash(sha)) => sha,
+                None => panic!("RefDelta needs RefHash"),
+            };
+            let base_object = match Object::from_hash(hex::encode(base_sha.clone()).as_str()) {
+                Ok(obj) => obj,
+                Err(_e) => {
+                    println!("ref hash with sha={}", hex::encode(base_sha));
+                    panic!("failed to create object from sha: hash does not (yet) exists");
+                }
+            };
+            let (_, content) = base_object.raw_content().unwrap();
+
+            let (r, src_size) = git_varint(&data).unwrap();
+            assert!(content.len() as u64 == src_size);
+
+            // target size (variable-length encoded) should validate the final object size
+            let (r, target_size) = git_varint(r).unwrap();
+
+            let (_, deltas) = handle_delta(r).unwrap();
+
+            let obj = apply_deltas(&content, &deltas);
+            assert!(obj.len() as u64 == target_size);
+
+            (base_object.object_type, obj)
+        }
+    }
+}
+
 pub(crate) fn reconstruct_objects<'a>(
     pack_objects: &BTreeMap<usize, PackEntry<'a>>,
     verbose: bool,
 ) {
-    let mut offset_type: HashMap<usize, ObjectType> = HashMap::new();
     for (offset, entry) in pack_objects {
-        let mut z = ZlibDecoder::new(entry.payload);
-        let mut data = vec![0u8; entry.size as usize];
-        z.read_exact(&mut data).unwrap();
-
-        let mut base_sha = String::from("");
-        let object = match &entry.object_type {
-            pot @ (PackObjectType::Commit | PackObjectType::Tree | PackObjectType::Blob) => {
-                offset_type.insert(*offset, pot.clone().into());
-                Object::from_pack(pot.clone().into(), &data)
-            }
-            PackObjectType::OffsetDelta | PackObjectType::ReferenceDelta => {
-                let (ot, base) = base_from(
-                    pack_objects,
-                    *offset,
-                    entry.delta_info.clone().unwrap(),
-                    &offset_type,
-                );
-                offset_type.insert(*offset, ot.clone());
-
-                if verbose {
-                    let base_obj = Object::from_pack(ot.clone(), &base);
-                    base_sha = base_obj.hash_str();
-                }
-
-                // source size (variable-length encoded) should match the size of the base object
-                // this probably does not include the header of the binary on disk?
-                let (r, _src_size) = git_varint(&data).unwrap();
-                // assert!(base_object.size as u64 == src_size);
-
-                // target size (variable-length encoded) should validate the final object size
-                let (r, _target_size) = git_varint(r).unwrap();
-
-                let (_, deltas) = handle_delta(r).unwrap();
-                Object::from_pack_deltas(&base, &deltas, ot)
-
-                // assert!(final_obj.size == target_size);
-            }
-        };
-
-        // TODO maybe we dont want to write this out?
+        let (ot, data) = object_from(pack_objects, *offset);
+        let object = Object::from_pack(ot, &data);
         object.write().unwrap();
 
         if verbose {
             println!(
-                "{} {} {} {}? {offset} {base_sha}",
+                "{} {} {} {}? {offset}",
                 object.hash_str(),
                 object.object_type,
                 entry.size,
