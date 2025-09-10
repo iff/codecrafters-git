@@ -30,7 +30,7 @@ pub(crate) fn invoke(pack_file: &str, verbose: bool) -> anyhow::Result<()> {
     }
 
     // reconstruct objects
-    pack::reconstruct_objects(&pack_objects, verbose);
+    pack::reconstruct_objects(&pack_objects, verbose, false);
 
     Ok(())
 }

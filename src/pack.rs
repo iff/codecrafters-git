@@ -2,7 +2,8 @@
 //!
 //! # Limitations
 //! - only supports version 2
-//! - ...
+//! - no writing support, only reading
+//! - limited tests
 //!
 //! # Docs
 //! - [git pack format](https://git-scm.com/docs/gitformat-pack)
@@ -175,6 +176,8 @@ fn parse_ofs_delta_offset(input: &[u8]) -> IResult<&[u8], u64> {
     Ok((rest, offset))
 }
 
+/// Parse the *entire* pack header (version + number of objects).
+/// Returns the remaining slice together with the extracted information.
 pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u8]>> {
     let (rest, pack) = take(4u8)(input)?;
     assert!(pack == "PACK".as_bytes());
@@ -188,8 +191,8 @@ pub(crate) fn parse_header(input: &[u8]) -> IResult<&[u8], (u32, u32), Error<&[u
     Ok((rest, (version, num_objects)))
 }
 
-/// parse the *entire* pack‑object header (type + full size) and return the
-/// remaining slice together with the extracted information.
+/// Parse the *entire* pack‑object header (type + full size).
+/// Returns the remaining slice together with the extracted information.
 pub fn parse_object_header(input: &[u8]) -> IResult<&[u8], (PackObjectType, u64)> {
     let (mut rest, (first_payload, first_cont)) = git_varint_byte(input)?;
 
@@ -287,6 +290,9 @@ fn handle_delta(input: &[u8]) -> IResult<&[u8], Vec<PackDelta>> {
     Ok((rest_decompressed, deltas))
 }
 
+/// Extracting a specific object type starting at `input` and returning the bytes after the object
+/// and a [`PackEntry`] needed to reconstruct the object later.
+/// Note that the `inflated_length` is the length of the data after decompression.
 pub(crate) fn parse_object<'a>(
     object_type: PackObjectType,
     inflated_length: u64,
@@ -339,6 +345,8 @@ pub(crate) fn parse_object<'a>(
     }
 }
 
+/// Given a byte stream `base`, apply the delta operations.
+/// Returns object bytes after applying operations.
 pub fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
     let mut obj: Vec<u8> = Vec::new();
     for delta in deltas {
@@ -355,6 +363,8 @@ pub fn apply_deltas(base: &[u8], deltas: &Vec<PackDelta>) -> Vec<u8> {
     obj
 }
 
+/// Recursively reconstruct the object starting at `offset`. Apply operations to objects with delta compressions.
+/// Returns its object type and bytes.
 fn object_from<'a>(
     pack_objects: &BTreeMap<usize, PackEntry<'a>>,
     offset: usize,
@@ -405,14 +415,21 @@ fn object_from<'a>(
     }
 }
 
+/// Given a mapping of offsets to pack entries, reconstruct the git objects and populate
+/// `.git/objects` if `verify` is not set.
+/// `verbose` mimics `git verify-pack --verbose`.
 pub(crate) fn reconstruct_objects<'a>(
     pack_objects: &BTreeMap<usize, PackEntry<'a>>,
     verbose: bool,
+    verify_only: bool,
 ) {
     for (offset, entry) in pack_objects {
         let (ot, data) = object_from(pack_objects, *offset);
         let object = Object::from_pack(ot, &data);
-        object.write().unwrap();
+
+        if !verify_only {
+            object.write().unwrap();
+        }
 
         if verbose {
             println!(
