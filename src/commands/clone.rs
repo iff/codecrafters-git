@@ -271,7 +271,7 @@ pub(crate) fn invoke(url: &str, path: Option<String>) -> anyhow::Result<()> {
         rest = new_rest;
     }
 
-    pack::reconstruct_objects(&pack_objects, false, true);
+    pack::reconstruct_objects(&pack_objects, false, false);
 
     // NOTE last 20 bytes are the SHA1 checksum of the entire pack content
     // TODO verify using something like our object writer
