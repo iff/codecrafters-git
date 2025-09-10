@@ -1,5 +1,4 @@
-# here we get: Result::unwrap() on an `Err` value: Custom { kind: InvalidInput, error: "corrupt deflate stream" }
-# so something is broken with offsets when cloning?
-rm -rf ../git-sample-3 && cargo run clone https://github.com/codecrafters-io/git-sample-3 ../git-sample-3
+# rm -rf ../git-sample-3 && cargo run clone https://github.com/codecrafters-io/git-sample-3 ../git-sample-3
+# rm -rf ../git-sample-2 && cargo run clone https://github.com/codecrafters-io/git-sample-2 ../git-sample-2
 # this works fine
-# v -d <(cargo run verify-pack test-pack/test.pack) <(git verify-pack --verbose test-pack/test.pack)
+v -d <(cargo run verify-pack --verbose test-pack/test.pack) <(git verify-pack --verbose test-pack/test.pack)
